@@ -654,7 +654,7 @@ class DatabaseManager:
 
     def delete_class(self, user_id: str, class_id: int) -> bool:
         """Delete a class with ownership check"""
-        db = self.get_db()
+        db = self._get_db()  # ✅ CHANGE THIS LINE (add underscore)
         try:
             cls = db.query(Class).filter(
                 Class.id == class_id,
