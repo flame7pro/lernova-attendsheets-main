@@ -236,11 +236,7 @@ class DatabaseManager:
             }
         finally:
             db.close()
-
-    def format_class(self, class_data):
-        """Public wrapper for _format_class"""
-        return self._format_class(class_data)
-
+            
     # Convenience wrapper expected by main.py
     def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
         return self.get_user_by_id(user_id)

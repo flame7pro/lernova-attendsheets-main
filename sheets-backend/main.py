@@ -1490,16 +1490,16 @@ async def update_class(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to update class: {str(e)}")
 
-@app.put("/classes/{class_id}/multi-session-attendance")
+@app.put("/classes/{classid}/multi-session-attendance")
 async def update_multi_session_attendance(
-    class_id: str,
+    classid: str,
     request: MultiSessionAttendanceUpdate,
     email: str = Depends(verify_token)
 ):
     """Update multi-session attendance - saves in new format"""
     print("="*60)
-    print(f"MULTI-SESSION: Update request")
-    print(f"Class ID: {class_id}")
+    print(f"[MULTI-SESSION] Update request")
+    print(f"Class ID: {classid}")
     print(f"Student ID: {request.student_id}")
     print(f"Date: {request.date}")
     print(f"Sessions: {len(request.sessions)}")
@@ -1512,16 +1512,19 @@ async def update_multi_session_attendance(
         
         user_id = user["id"]
         
-        # Get existing class data
-        class_data = db.get_class(user_id, int(class_id))
-        if not class_data:
+        # Get class data
+        classdata = db.get_class(user_id, int(classid))
+        if not classdata:
             raise HTTPException(status_code=404, detail="Class not found")
         
-        # Find and update the specific student
+        # ✅ FIND AND UPDATE THE STUDENT
         student_found = False
-        for student in class_data["students"]:
+        for student in classdata["students"]:
             if student["id"] == request.student_id:
-                # ✅ SAVE IN NEW FORMAT
+                # Update attendance for this date with new sessions format
+                if "attendance" not in student:
+                    student["attendance"] = {}
+                
                 student["attendance"][request.date] = {
                     "sessions": [
                         {
@@ -1533,8 +1536,9 @@ async def update_multi_session_attendance(
                     ],
                     "updatedAt": datetime.utcnow().isoformat()
                 }
+                
                 print(f"✅ Updated student {request.student_id}")
-                print(f"   Sessions: {len(request.sessions)}")
+                print(f"Sessions: {len(request.sessions)}")
                 student_found = True
                 break
         
@@ -1542,15 +1546,12 @@ async def update_multi_session_attendance(
             raise HTTPException(status_code=404, detail="Student not found in class")
         
         # Save updated class back to database
-        updated_class = db.update_class(user_id, int(class_id), class_data)
+        updated_class = db.update_class(user_id, int(classid), classdata)
         
         print("✅ MULTI-SESSION SUCCESS")
         print("="*60)
-        return {
-            "success": True,
-            "message": "Multi-session attendance updated",
-            "class": updated_class
-        }
+        
+        return {"success": True, "message": "Multi-session attendance updated", "class": updated_class}
         
     except HTTPException:
         raise
@@ -1559,7 +1560,7 @@ async def update_multi_session_attendance(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to update multi-session attendance: {str(e)}")
-   
+  
 @app.get("/classes/{class_id}/statistics")
 async def get_class_statistics(
     class_id: str,
