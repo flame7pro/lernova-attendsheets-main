@@ -1,0 +1,120 @@
+# ============================================
+# BACKEND (Python/FastAPI)
+# ============================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.Python
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+sheets-backend/venv/
+sheets-backend/env/
+
+# Environment Variables
+.env
+.env.*
+.env.local
+.env.production
+sheets-backend/.env
+sheets-backend/.env.*
+
+# Database Files (old file-based storage)
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Alembic
+sheets-backend/alembic/versions/__pycache__/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+
+# ============================================
+# FRONTEND (Next.js/React)
+# ============================================
+
+# Dependencies
+node_modules/
+sheets-frontend/node_modules/
+/.pnp
+.pnp.*
+.pnp.js
+
+# Yarn
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# Testing
+/coverage
+sheets-frontend/coverage/
+
+# Next.js
+.next/
+out/
+sheets-frontend/.next/
+sheets-frontend/out/
+
+# Production
+/build
+sheets-frontend/build/
+
+# Debug Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+lerna-debug.log*
+
+# Misc
+.DS_Store
+*.pem
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Vercel
+.vercel
+
+# Turbo
+.turbo
+
+
+# ============================================
+# GIT & SYSTEM
+# ============================================
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor Backups
+*~
+*.bak
+*.tmp
+*.temp
