@@ -19,7 +19,6 @@ class User(Base):
     device_id = Column(String, nullable=True)
     device_info = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    trusted_devices = Column(JSON, default=list)
 
 class Class(Base):
     __tablename__ = "classes"
@@ -86,15 +85,15 @@ class QRSession(Base):
     status = Column(String, default="active")
 
 class VerificationCode(Base):
-    """Email verification codes"""
-    __tablename__ = "verification_codes"
+    __tablename__ = 'verification_codes'
     
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, index=True)
     email = Column(String, nullable=False)
     code = Column(String, nullable=False)
-    purpose = Column(String, nullable=False)  # 'email_verification', 'password_reset', 'change_password'
-    created_at = Column(DateTime, default=datetime.utcnow)
+    purpose = Column(String, nullable=False)
     expires_at = Column(DateTime, nullable=False)
+    extra_data = Column(JSON, default=dict)  # ADD THIS LINE
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 class AttendanceSession(Base):
     __tablename__ = "attendance_sessions"

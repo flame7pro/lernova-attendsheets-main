@@ -116,7 +116,12 @@ class DatabaseManager:
             if not user:
                 return False
             
-            trusted_devices = user.device_info.get('trusted_devices', []) if user.device_info else []
+            # Initialize device_info if None
+            if not user.device_info:
+                user.device_info = {}
+            
+            # Get existing trusted_devices from device_info JSON
+            trusted_devices = user.device_info.get('trusted_devices', [])
             device_id = device_info.get('id')
             
             # Check if device already exists
@@ -141,10 +146,12 @@ class DatabaseManager:
                 }
                 trusted_devices.append(new_device)
             
-            # Update user's device_info
-            if not user.device_info:
-                user.device_info = {}
+            # Update device_info with trusted_devices
             user.device_info['trusted_devices'] = trusted_devices
+            
+            # Mark modified for SQLAlchemy to detect JSON change
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(user, 'device_info')
             
             db.commit()
             return True
@@ -155,7 +162,6 @@ class DatabaseManager:
             return False
         finally:
             db.close()
-
 
     def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get user by ID"""
