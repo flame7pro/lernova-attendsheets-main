@@ -269,10 +269,11 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
     try {
       const token = localStorage.getItem("access_token");
       if (!token) {
+        console.error("No auth token");
         return;
       }
 
-      // Find the actual student object to get their ID
+      // Find the actual student object
       const student = activeClass.students.find(s => s.id === selectedStudent);
       if (!student) {
         console.error("Student not found");
@@ -280,6 +281,13 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
       }
 
       const validSessions = sessions.filter((s) => s.status !== null);
+
+      console.log("🔵 Saving multi-session:", {
+        classId: activeClass.id,
+        studentId: student.id,
+        date: multiSessionDate,
+        sessions: validSessions
+      });
 
       // ✅ Call the multi-session endpoint
       const response = await fetch(
@@ -303,17 +311,18 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
       );
 
       if (!response.ok) {
+        const errorData = await response.json();
+        console.error("❌ Save failed:", errorData);
         throw new Error("Failed to save multi-session attendance");
       }
 
       const data = await response.json();
+      console.log("✅ Save successful:", data);
 
       // Update parent state with returned class data
       if (data.class) {
         onUpdateClassData(data.class);
       }
-
-      console.log("✅ Multi-session attendance saved successfully!");
 
       // Close modal
       setShowMultiSessionModal(false);
@@ -324,6 +333,7 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
       alert("Failed to save multi-session attendance. Please try again.");
     }
   };
+
 
   const handleCloseMultiSession = () => {
     setShowMultiSessionModal(false);
