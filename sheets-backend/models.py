@@ -1,6 +1,6 @@
 from sqlalchemy import Column, BigInteger, String, Boolean, DateTime, Date, ForeignKey, Text, JSON, Integer
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from database import Base
 
 class User(Base):
@@ -14,7 +14,7 @@ class User(Base):
     email_verified = Column(Boolean, default=False)
     device_id = Column(String, nullable=True)
     device_info = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))  # ✅ FIXED
 
 class Class(Base):
     __tablename__ = "classes"
@@ -26,7 +26,7 @@ class Class(Base):
     enrollment_mode = Column(String, default="manual_entry")
     custom_columns = Column(JSON, default=list)
     thresholds = Column(JSON, default=dict)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))  # ✅ FIXED
 
 class ClassStudent(Base):
     """Students in a class (for manual_entry and import_data modes)"""
@@ -39,7 +39,7 @@ class ClassStudent(Base):
     roll_no = Column(String, default="")
     attendance = Column(JSON, default=dict)
     custom_data = Column(JSON, default=dict)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))  # ✅ FIXED
 
 class StudentUser(Base):
     """Student accounts (for enrollment_via_id mode)"""
@@ -51,7 +51,7 @@ class StudentUser(Base):
     email = Column(String, nullable=False)
     device_id = Column(String)
     device_info = Column(JSON)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))  # ✅ FIXED
 
 class Enrollment(Base):
     """Student enrollments in classes"""
@@ -62,7 +62,7 @@ class Enrollment(Base):
     class_id = Column(BigInteger, ForeignKey("classes.id", ondelete="CASCADE"))
     name = Column(String, nullable=False)
     roll_no = Column(String, default="")
-    enrolled_at = Column(DateTime, default=datetime.utcnow)
+    enrolled_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))  # ✅ FIXED
 
 class QRSession(Base):
     """Active QR attendance sessions"""
@@ -73,10 +73,10 @@ class QRSession(Base):
     teacher_id = Column(BigInteger, ForeignKey("users.id"))
     date = Column(String, nullable=False)
     session_number = Column(Integer, nullable=False)
-    started_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))  # ✅ FIXED
     rotation_interval = Column(Integer, default=5)
     current_code = Column(String, nullable=False)
-    code_generated_at = Column(DateTime, default=datetime.utcnow)
+    code_generated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))  # ✅ FIXED
     scanned_students = Column(JSON, default=list)
     status = Column(String, default="active")
 
@@ -87,9 +87,9 @@ class VerificationCode(Base):
     email = Column(String, nullable=False)
     code = Column(String, nullable=False)
     purpose = Column(String, nullable=False)
-    expires_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)  # ✅ FIXED
     extra_data = Column(JSON, default=dict)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))  # ✅ FIXED
 
 class AttendanceSession(Base):
     __tablename__ = "attendance_sessions"
@@ -98,4 +98,4 @@ class AttendanceSession(Base):
     class_id = Column(BigInteger, ForeignKey("classes.id"), nullable=False)
     date = Column(Date, nullable=False)
     title = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))  # ✅ FIXED
