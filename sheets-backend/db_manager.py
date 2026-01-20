@@ -373,7 +373,6 @@ class DatabaseManager:
                 AttendanceSession.class_id == str(class_id)
             )
             
-            # Filter by date if provided
             if date:
                 query = query.filter(AttendanceSession.date == date)
             
