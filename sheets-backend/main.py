@@ -97,7 +97,7 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 class UserResponse(BaseModel):
-    id: str
+    id: int
     email: str
     name: str
 
