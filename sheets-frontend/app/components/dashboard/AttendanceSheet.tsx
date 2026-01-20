@@ -1,7 +1,7 @@
 
 'use client';
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, X, Users, Trash2, Settings, Download, FileText, FileSpreadsheet, File, Check, Edit2, QrCode, UserPlus, Search } from 'lucide-react';
 import Papa from 'papaparse';
 import jsPDF from 'jspdf';
@@ -11,17 +11,17 @@ import { MultiSessionModal } from './MultiSessionAttendance';
 import { Class, AttendanceThresholds } from '@/types';
 
 interface AttendanceValue {
-    sessions?: Array<{ id: string; name: string; status: 'P' | 'A' | 'L' }>;
-    status?: 'P' | 'A' | 'L';
-    count?: number;
+  sessions?: Array<{ id: string; name: string; status: 'P' | 'A' | 'L' }>;
+  status?: 'P' | 'A' | 'L';
+  count?: number;
 }
 
 interface Student {
-    id: number;
-    name: string;
-    rollNo: string;
-    attendance: Record<string, AttendanceValue | 'P' | 'A' | 'L' | undefined>;
-    [key: string]: any;
+  id: number;
+  name: string;
+  rollNo: string;
+  attendance: Record<string, AttendanceValue | 'P' | 'A' | 'L' | undefined>;
+  [key: string]: any;
 }
 
 
@@ -44,6 +44,48 @@ interface AttendanceSheetProps {
   onUpdateClassData: (updatedClass: Class) => void;
 }
 
+// Add this hook definition before the AttendanceSheet component
+function useDebounce<T extends (...args: any[]) => any>(
+  callback: T,
+  delay: number
+): [(...args: Parameters<T>) => void, () => void] {
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const callbackRef = useRef(callback);
+
+  // Update callback ref when it changes
+  useEffect(() => {
+    callbackRef.current = callback;
+  }, [callback]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
+
+  const debouncedCallback = useCallback((...args: Parameters<T>) => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+
+    timeoutRef.current = setTimeout(() => {
+      callbackRef.current(...args);
+    }, delay);
+  }, [delay]);
+
+  const cancel = useCallback(() => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+  }, []);
+
+  return [debouncedCallback, cancel];
+}
+
+
 export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
   activeClass,
   currentMonth,
@@ -61,6 +103,64 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
   onOpenQRAttendance,
   onUpdateClassData,
 }) => {
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+
+  // 🆕 ADD SAVE TO DATABASE FUNCTION
+  const saveToDatabase = async (updatedClass: Class) => {
+    try {
+      setIsSaving(true);
+      setSaveStatus('saving');
+      console.log('💾 Auto-saving class data...');
+
+      const token = localStorage.getItem('access_token');
+      if (!token) {
+        console.error('No auth token found');
+        setSaveStatus('error');
+        return;
+      }
+
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/classes/${activeClass.id}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            id: updatedClass.id,
+            name: updatedClass.name,
+            students: updatedClass.students,
+            customColumns: updatedClass.customColumns || [],
+            thresholds: updatedClass.thresholds || {},
+            enrollmentMode: updatedClass.enrollment_mode || 'manualentry'
+          })
+        }
+      );
+
+      if (response.ok) {
+        console.log('✅ Auto-save successful');
+        setSaveStatus('saved');
+        setLastSaved(new Date());
+
+        // Hide "saved" message after 2 seconds
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      } else {
+        console.error('❌ Auto-save failed:', response.statusText);
+        setSaveStatus('error');
+      }
+    } catch (error) {
+      console.error('❌ Auto-save error:', error);
+      setSaveStatus('error');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // 🆕 CREATE DEBOUNCED SAVE (1 second delay)
+  const [debouncedSave, cancelSave] = useDebounce(saveToDatabase, 1000);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportSuccess, setExportSuccess] = useState(false);
@@ -160,7 +260,7 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
     setShowMultiSessionModal(true);
   };
 
-  const handleSaveMultiSession = async (sessions: Array<{ id: string; name: string; status: 'P' | 'A' | 'L' | null }>) => {
+  const handleSaveMultiSession = async (sessions: Array<{ id: string; name: string; status: "P" | "A" | "L" | null }>) => {
     if (selectedStudent === null || !multiSessionDate) return;
 
     try {
@@ -182,7 +282,7 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
                   sessions: validSessions.map(s => ({
                     id: s.id,
                     name: s.name,
-                    status: s.status as 'P' | 'A' | 'L'
+                    status: s.status as "P" | "A" | "L",
                   })),
                   updated_at: new Date().toISOString()
                 }
@@ -193,52 +293,6 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
         })
       };
 
-      // Recalculate statistics locally (optional but nice for immediate feedback)
-      // This matches the backend calculation
-      const calculateLocalStats = () => {
-        let totalPresent = 0;
-        let totalAbsent = 0;
-        let totalLate = 0;
-        let total = 0;
-
-        updatedClass.students.forEach(student => {
-          Object.values(student.attendance).forEach(dayData => {
-            if (dayData) {
-              if (typeof dayData === 'object' && 'sessions' in dayData) {
-                dayData.sessions.forEach((session: any) => {
-                  total++;
-                  if (session.status === 'P') totalPresent++;
-                  else if (session.status === 'A') totalAbsent++;
-                  else if (session.status === 'L') totalLate++;
-                });
-              } else if (typeof dayData === 'object' && 'status' in dayData) {
-                const count = dayData.count || 1;
-                total += count;
-                if (dayData.status === 'P') totalPresent += count;
-                else if (dayData.status === 'A') totalAbsent += count;
-                else if (dayData.status === 'L') totalLate += count;
-              } else if (typeof dayData === 'string') {
-                total++;
-                if (dayData === 'P') totalPresent++;
-                else if (dayData === 'A') totalAbsent++;
-                else if (dayData === 'L') totalLate++;
-              }
-            }
-          });
-        });
-
-        const avgAttendance = total > 0 ? ((totalPresent + totalLate) / total * 100) : 0;
-
-        return {
-          totalStudents: updatedClass.students.length,
-          avgAttendance: parseFloat(avgAttendance.toFixed(3)),
-          atRiskCount: 0, // You can calculate this if needed
-          excellentCount: 0 // You can calculate this if needed
-        };
-      };
-
-      updatedClass.statistics = calculateLocalStats();
-
       // Update parent state immediately
       onUpdateClassData(updatedClass);
 
@@ -247,36 +301,11 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
       setSelectedDay(null);
       setSelectedStudent(null);
 
-      // Save to backend (non-blocking)
-      fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/classes/${activeClass.id}/multi-session-attendance`,
-        {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            student_id: selectedStudent,
-            date: multiSessionDate,
-            sessions: validSessions.map(s => ({
-              id: s.id,
-              name: s.name,
-              status: s.status
-            }))
-          })
-        }
-      ).then(response => {
-        if (!response.ok) {
-          console.error('Failed to save to backend');
-        }
-      }).catch(error => {
-        console.error('Backend error:', error);
-      });
     } catch (error) {
       console.error('Failed to update:', error);
     }
   };
+
 
   const handleCloseMultiSession = () => {
     setShowMultiSessionModal(false);
@@ -302,58 +331,58 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
   });
 
   const calculateAttendance = (
-        student: Student,
-        daysInMonth: number,
-        currentMonth: number,
-        currentYear: number
-    ): string => {
-        let present = 0;
-        let absent = 0;
-        let late = 0;
-        let total = 0;
+    student: Student,
+    daysInMonth: number,
+    currentMonth: number,
+    currentYear: number
+  ): string => {
+    let present = 0;
+    let absent = 0;
+    let late = 0;
+    let total = 0;
 
-        console.log(`[CALCULATE] Processing student: ${student.name}`);
+    console.log(`[CALCULATE] Processing student: ${student.name}`);
 
-        for (let day = 1; day <= daysInMonth; day++) {
-            const dateKey = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-            const attendanceValue = student.attendance[dateKey];
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateKey = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const attendanceValue = student.attendance[dateKey];
 
-            if (attendanceValue) {
-                // ✅ NEW FORMAT: { sessions: [...], updated_at: "..." }
-                if (typeof attendanceValue === 'object' && 'sessions' in attendanceValue && attendanceValue.sessions) {
-                    attendanceValue.sessions.forEach((session) => {
-                        if (session.status) {
-                            total++;
-                            if (session.status === 'P') present++;
-                            else if (session.status === 'A') absent++;
-                            else if (session.status === 'L') late++;
-                        }
-                    });
-                }
-                // OLD FORMAT: { status: 'P', count: 2 }
-                else if (typeof attendanceValue === 'object' && 'status' in attendanceValue && attendanceValue.status) {
-                    const count = attendanceValue.count || 1;
-                    total += count;
-                    if (attendanceValue.status === 'P') present += count;
-                    else if (attendanceValue.status === 'A') absent += count;
-                    else if (attendanceValue.status === 'L') late += count;
-                }
-                // VERY OLD FORMAT: 'P' | 'A' | 'L'
-                else if (typeof attendanceValue === 'string') {
-                    total++;
-                    if (attendanceValue === 'P') present++;
-                    else if (attendanceValue === 'A') absent++;
-                    else if (attendanceValue === 'L') late++;
-                }
+      if (attendanceValue) {
+        // ✅ NEW FORMAT: { sessions: [...], updated_at: "..." }
+        if (typeof attendanceValue === 'object' && 'sessions' in attendanceValue && attendanceValue.sessions) {
+          attendanceValue.sessions.forEach((session) => {
+            if (session.status) {
+              total++;
+              if (session.status === 'P') present++;
+              else if (session.status === 'A') absent++;
+              else if (session.status === 'L') late++;
             }
+          });
         }
+        // OLD FORMAT: { status: 'P', count: 2 }
+        else if (typeof attendanceValue === 'object' && 'status' in attendanceValue && attendanceValue.status) {
+          const count = attendanceValue.count || 1;
+          total += count;
+          if (attendanceValue.status === 'P') present += count;
+          else if (attendanceValue.status === 'A') absent += count;
+          else if (attendanceValue.status === 'L') late += count;
+        }
+        // VERY OLD FORMAT: 'P' | 'A' | 'L'
+        else if (typeof attendanceValue === 'string') {
+          total++;
+          if (attendanceValue === 'P') present++;
+          else if (attendanceValue === 'A') absent++;
+          else if (attendanceValue === 'L') late++;
+        }
+      }
+    }
 
-        const percentage = total > 0 ? ((present + late) / total) * 100 : 0;
-        
-        console.log(`[CALCULATE] ${student.name}: ${present}P + ${late}L / ${total} = ${percentage.toFixed(3)}%`);
+    const percentage = total > 0 ? ((present + late) / total) * 100 : 0;
 
-        return percentage.toFixed(3);
-    };
+    console.log(`[CALCULATE] ${student.name}: ${present}P + ${late}L / ${total} = ${percentage.toFixed(3)}%`);
+
+    return percentage.toFixed(3);
+  };
 
   const getRiskLevel = (percentage: string) => {
     const pct = parseFloat(percentage);
@@ -861,6 +890,33 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
 
   return (
     <>
+      {/* 🆕 SAVE STATUS INDICATOR */}
+      {saveStatus === 'saving' && (
+        <div className="fixed top-20 right-4 sm:right-6 bg-emerald-600 text-white px-4 py-3 rounded-xl shadow-lg z-50 flex items-center gap-2 animate-slide-in">
+          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+          <span className="text-sm font-medium">Saving changes...</span>
+        </div>
+      )}
+
+      {saveStatus === 'saved' && (
+        <div className="fixed top-20 right-4 sm:right-6 bg-emerald-600 text-white px-4 py-3 rounded-xl shadow-lg z-50 flex items-center gap-2 animate-slide-in">
+          <Check className="w-4 h-4" />
+          <span className="text-sm font-medium">All changes saved</span>
+          {lastSaved && (
+            <span className="text-xs text-emerald-200 ml-2">
+              {lastSaved.toLocaleTimeString()}
+            </span>
+          )}
+        </div>
+      )}
+
+      {saveStatus === 'error' && (
+        <div className="fixed top-20 right-4 sm:right-6 bg-rose-600 text-white px-4 py-3 rounded-xl shadow-lg z-50 flex items-center gap-2 animate-slide-in">
+          <X className="w-4 h-4" />
+          <span className="text-sm font-medium">Failed to save. Retrying...</span>
+        </div>
+      )}
+
       {/* Header Section */}
       <div className="mb-4 sm:mb-6">
         <div className="bg-white rounded-xl sm:rounded-2xl shadow-md border border-emerald-200 p-3 sm:p-4 lg:p-6">
@@ -916,20 +972,20 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
 
                     {/* Class ID pill - Click to Copy */}
                     {activeClass.enrollment_mode === 'enrollment_via_id' && (
-                    <button
-                      onClick={handleCopyClassId}
-                      className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 bg-gradient-to-r from-slate-50 to-slate-100 border border-slate-200 rounded-full shadow-sm hover:bg-slate-100 hover:border-slate-300 active:scale-95 transition-all cursor-pointer group"
-                      title="Click to copy ID"
-                    >
-                      <span className="text-xs font-mono font-semibold text-slate-700">ID: {activeClass.id}</span>
-                      {copiedClassId ? (
-                        <Check className="w-3 h-3 text-emerald-600" />
-                      ) : (
-                        <svg className="w-3 h-3 text-slate-400 group-hover:text-slate-600 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                        </svg>
-                      )}
-                    </button>
+                      <button
+                        onClick={handleCopyClassId}
+                        className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 bg-gradient-to-r from-slate-50 to-slate-100 border border-slate-200 rounded-full shadow-sm hover:bg-slate-100 hover:border-slate-300 active:scale-95 transition-all cursor-pointer group"
+                        title="Click to copy ID"
+                      >
+                        <span className="text-xs font-mono font-semibold text-slate-700">ID: {activeClass.id}</span>
+                        {copiedClassId ? (
+                          <Check className="w-3 h-3 text-emerald-600" />
+                        ) : (
+                          <svg className="w-3 h-3 text-slate-400 group-hover:text-slate-600 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                        )}
+                      </button>
                     )}
 
                     {/* Month pill - hidden on mobile, shown on desktop */}

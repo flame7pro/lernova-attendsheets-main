@@ -947,6 +947,8 @@ async def get_current_user(email: str = Depends(verify_token)):
 async def delete_account(email: str = Depends(verify_token)):
     """Delete user account and all associated data"""
     try:
+        print(f"API: Delete account request for {email}")
+        
         user = db.get_user_by_email(email)
         if not user:
             raise HTTPException(
@@ -956,7 +958,7 @@ async def delete_account(email: str = Depends(verify_token)):
         
         user_id = user["id"]
         
-        # Use the database manager's delete method
+        # Use delete_user which should handle cascade deletion
         success = db.delete_user(user_id)
         
         if not success:
@@ -965,14 +967,18 @@ async def delete_account(email: str = Depends(verify_token)):
                 detail="Failed to delete account"
             )
         
+        print(f"API: Account {email} deleted successfully")
         return {
             "success": True,
             "message": "Account deleted successfully"
         }
+        
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Delete account error: {e}")
+        print(f"API: Delete account error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete account"
@@ -1141,7 +1147,7 @@ async def delete_student_account(email: str = Depends(verify_token)):
     try:
         print(f"API: Delete student account request for {email}")
         
-        # Get student data
+        # Verify student exists
         student = db.get_student_by_email(email)
         if not student:
             raise HTTPException(
@@ -1149,23 +1155,27 @@ async def delete_student_account(email: str = Depends(verify_token)):
                 detail="Student not found"
             )
         
-        student_id = student["id"]
+        # Delete using the new method
+        success = db.delete_student_account(email)
         
-        # Use the database manager's delete method
-        success = db.delete_student(student_id)
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to delete student account"
             )
         
-        print(f"API: Student account deleted successfully")
-        return {"success": True, "message": "Student account deleted successfully"}
+        print(f"API: Student account {email} deleted successfully")
+        return {
+            "success": True,
+            "message": "Student account deleted successfully"
+        }
         
     except HTTPException:
         raise
     except Exception as e:
         print(f"API: Delete student account error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete student account"
@@ -1555,46 +1565,32 @@ async def update_multi_session_attendance(
     request: MultiSessionAttendanceUpdate,
     email: str = Depends(verify_token)
 ):
-    """
-    Update multi-session attendance for a student on a specific date.
-    Stores sessions array in the new format: { sessions: [...], updated_at: ... }
-    """
-    print(f"\n{'='*60}")
-    print(f"[MULTI_SESSION] Update request")
-    print(f"  Class ID: {class_id}")
-    print(f"  Student ID: {request.student_id}")
-    print(f"  Date: {request.date}")
-    print(f"  Sessions: {len(request.sessions)}")
-    print(f"{'='*60}")
+    """Update multi-session attendance - saves in new format"""
+    print("="*60)
+    print(f"MULTI-SESSION: Update request")
+    print(f"Class ID: {class_id}")
+    print(f"Student ID: {request.student_id}")
+    print(f"Date: {request.date}")
+    print(f"Sessions: {len(request.sessions)}")
+    print("="*60)
     
     try:
-        # Get teacher
         user = db.get_user_by_email(email)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
         user_id = user["id"]
         
-        # Get class data
-        class_file = db.get_class_file(user_id, class_id)
-        class_data = db.read_json(class_file)
-        
+        # Get existing class data
+        class_data = db.get_class(user_id, int(class_id))
         if not class_data:
             raise HTTPException(status_code=404, detail="Class not found")
         
-        # Find student in class
-        students = class_data.get("students", [])
+        # Find and update the specific student
         student_found = False
-        
-        for student in students:
-            if student.get("id") == request.student_id:
-                student_found = True
-                
-                # Initialize attendance dict if needed
-                if "attendance" not in student:
-                    student["attendance"] = {}
-                
-                # Store in NEW format: { sessions: [...], updated_at: ... }
+        for student in class_data["students"]:
+            if student["id"] == request.student_id:
+                # ✅ SAVE IN NEW FORMAT
                 student["attendance"][request.date] = {
                     "sessions": [
                         {
@@ -1604,45 +1600,66 @@ async def update_multi_session_attendance(
                         }
                         for session in request.sessions
                     ],
-                    "updated_at": datetime.utcnow().isoformat()
+                    "updatedAt": datetime.utcnow().isoformat()
                 }
-                
-                print(f"[MULTI_SESSION] Updated student {request.student_id}")
-                print(f"  Sessions stored: {len(request.sessions)}")
+                print(f"✅ Updated student {request.student_id}")
+                print(f"   Sessions: {len(request.sessions)}")
+                student_found = True
                 break
         
         if not student_found:
             raise HTTPException(status_code=404, detail="Student not found in class")
         
-        # Recalculate statistics
-        class_data["statistics"] = db.calculate_class_statistics(class_data, class_id)
+        # Save updated class back to database
+        updated_class = db.update_class(user_id, int(class_id), class_data)
         
-        # Save updated class
-        class_data["updated_at"] = datetime.utcnow().isoformat()
-        db.write_json(class_file, class_data)
-        
-        # Update user overview
-        db.update_user_overview(user_id)
-        
-        print(f"[MULTI_SESSION] ✅ SUCCESS")
-        print(f"{'='*60}\n")
-        
+        print("✅ MULTI-SESSION SUCCESS")
+        print("="*60)
         return {
             "success": True,
             "message": "Multi-session attendance updated",
-            "class": class_data
+            "class": updated_class
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[MULTI_SESSION] ❌ ERROR: {e}")
+        print(f"❌ MULTI-SESSION ERROR: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update multi-session attendance: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to update multi-session attendance: {str(e)}")
+   
+@app.get("/classes/{class_id}/statistics")
+async def get_class_statistics(
+    class_id: str,
+    email: str = Depends(verify_token)
+):
+    """Get detailed statistics for a class"""
+    try:
+        user = db.get_user_by_email(email)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        class_data = db.get_class(user["id"], int(class_id))
+        if not class_data:
+            raise HTTPException(status_code=404, detail="Class not found")
+        
+        # Calculate statistics
+        statistics = db.calculate_class_statistics_from_data(class_data)
+        
+        return {
+            "success": True,
+            "statistics": statistics,
+            "class_name": class_data.get("name"),
+            "total_students": len(class_data.get("students", []))
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Get statistics error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get statistics")
+
 
 @app.delete("/classes/{class_id}")
 async def delete_class(class_id: str, email: str = Depends(verify_token)):

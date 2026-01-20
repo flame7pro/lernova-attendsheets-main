@@ -20,6 +20,47 @@ import { MonthYearSelector } from '../components/dashboard/MonthYearSelector';
 import { AttendanceThresholds, Student, CustomColumn, Class } from '@/types';
 import { QRAttendanceModal } from '../components/QRAttendanceModal';
 
+// Add this custom hook after imports and before the DashboardPage component
+function useDebounce<T extends (...args: any[]) => any>(
+  callback: T,
+  delay: number
+): [(...args: Parameters<T>) => void, () => void] {
+  const timeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  const callbackRef = React.useRef(callback);
+
+  // Update callback ref when it changes
+  React.useEffect(() => {
+    callbackRef.current = callback;
+  }, [callback]);
+
+  // Cleanup on unmount
+  React.useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
+
+  const debouncedCallback = React.useCallback((...args: Parameters<T>) => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+
+    timeoutRef.current = setTimeout(() => {
+      callbackRef.current(...args);
+    }, delay);
+  }, [delay]);
+
+  const cancel = React.useCallback(() => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+  }, []);
+
+  return [debouncedCallback, cancel];
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const { user, logout, isAuthenticated, loading } = useAuth();
@@ -175,7 +216,7 @@ export default function DashboardPage() {
       setSyncing(false);
     }
   };
-  
+
 
   // Sync classes to backend
   const syncToBackend = async (classesToSync: Class[]) => {
@@ -191,11 +232,34 @@ export default function DashboardPage() {
   };
 
   // Save class to backend and localStorage
-  const saveClass = async (updatedClass: Class) => {
-    const updatedClasses = classes.map(c =>
-      c.id === updatedClass.id ? updatedClass : c
-    );
+  const saveClassToBackend = async (updatedClass: Class) => {
+    if (!user) return;
 
+    // Save to localStorage immediately for offline support
+    const updatedClasses = classes.map(c => c.id === updatedClass.id ? updatedClass : c);
+    if (user) {
+      localStorage.setItem(`classes_${user.id}`, JSON.stringify(updatedClasses));
+    }
+
+    // Sync to backend
+    try {
+      console.log('💾 Saving class to Neon:', updatedClass.id);
+      await classService.updateClass(String(updatedClass.id), updatedClass);
+      console.log('✅ Saved to Neon successfully');
+      setSyncError(''); // Clear any previous errors
+    } catch (error) {
+      console.error('❌ Error saving class to backend:', error);
+      setSyncError('Failed to sync some changes');
+      // Don't block UI - data is saved locally
+    }
+  };
+
+  // Create debounced version (saves 1 second after last change)
+  const [debouncedSave] = useDebounce(saveClassToBackend, 1000);
+
+  // Immediate save (for critical operations like delete)
+  const saveClass = async (updatedClass: Class) => {
+    const updatedClasses = classes.map(c => c.id === updatedClass.id ? updatedClass : c);
     setClasses(updatedClasses);
 
     // Save to localStorage immediately
@@ -203,14 +267,13 @@ export default function DashboardPage() {
       localStorage.setItem(`classes_${user.id}`, JSON.stringify(updatedClasses));
     }
 
-    // Sync to backend asynchronously (don't block UI)
+    // Sync to backend asynchronously
     try {
       await classService.updateClass(String(updatedClass.id), updatedClass);
-      setSyncError(''); // Clear any previous errors
+      setSyncError('');
     } catch (error) {
       console.error('Error saving class to backend:', error);
-      // Don't show error to user, data is saved locally
-      // Backend will sync when connection is restored
+      setSyncError('Failed to sync some changes');
     }
   };
 
@@ -354,12 +417,13 @@ export default function DashboardPage() {
 
     setClasses(updatedClasses);
 
-    // Sync to backend
+    // 🆕 AUTO-SAVE TO NEON (DEBOUNCED)
     const updatedClass = updatedClasses.find(c => c.id === activeClassId);
     if (updatedClass) {
-      saveClass(updatedClass);
+      debouncedSave(updatedClass);
     }
   };
+
 
   const handleUpdateStudent = (studentId: number, field: string, value: any) => {
     if (!activeClassId) return;
@@ -369,9 +433,7 @@ export default function DashboardPage() {
         ? {
           ...cls,
           students: cls.students.map(student =>
-            student.id === studentId
-              ? { ...student, [field]: value }
-              : student
+            student.id === studentId ? { ...student, [field]: value } : student
           )
         }
         : cls
@@ -379,12 +441,13 @@ export default function DashboardPage() {
 
     setClasses(updatedClasses);
 
-    // Debounced sync to backend
+    // 🆕 AUTO-SAVE TO NEON (DEBOUNCED)
     const updatedClass = updatedClasses.find(c => c.id === activeClassId);
     if (updatedClass) {
-      saveClass(updatedClass);
+      debouncedSave(updatedClass);
     }
   };
+
 
   const handleDeleteStudent = (studentId: number) => {
     if (!activeClassId) return;
@@ -397,11 +460,13 @@ export default function DashboardPage() {
 
     setClasses(updatedClasses);
 
+    // 🆕 AUTO-SAVE TO NEON (IMMEDIATE - deletion is critical)
     const updatedClass = updatedClasses.find(c => c.id === activeClassId);
     if (updatedClass) {
-      saveClass(updatedClass);
+      saveClass(updatedClass); // Use immediate save, not debounced
     }
   };
+
 
   const handleToggleAttendance = (studentId: number, day: number) => {
     if (!activeClassId) return;
@@ -415,25 +480,23 @@ export default function DashboardPage() {
           students: cls.students.map(student => {
             if (student.id === studentId) {
               const currentStatus = student.attendance[dateKey];
-              let newStatus: { status: 'P' | 'A' | 'L'; count: number } | undefined;
+              let newStatus: { status: "P" | "A" | "L"; count: number } | undefined;
 
-              // Handle both old format (string) and new format (object)
-              let currentStatusValue: 'P' | 'A' | 'L' | undefined;
+              let currentStatusValue: "P" | "A" | "L" | undefined;
               if (currentStatus) {
                 if (typeof currentStatus === 'object' && 'status' in currentStatus) {
                   currentStatusValue = currentStatus.status;
                 } else {
-                  currentStatusValue = currentStatus as 'P' | 'A' | 'L';
+                  currentStatusValue = currentStatus as "P" | "A" | "L";
                 }
               }
 
-              // Cycle through statuses (always reset count to 1 when changing status)
               if (!currentStatusValue) {
-                newStatus = { status: 'P', count: 1 };
-              } else if (currentStatusValue === 'P') {
-                newStatus = { status: 'A', count: 1 };
-              } else if (currentStatusValue === 'A') {
-                newStatus = { status: 'L', count: 1 };
+                newStatus = { status: "P", count: 1 };
+              } else if (currentStatusValue === "P") {
+                newStatus = { status: "A", count: 1 };
+              } else if (currentStatusValue === "A") {
+                newStatus = { status: "L", count: 1 };
               } else {
                 newStatus = undefined; // L → empty
               }
@@ -454,14 +517,13 @@ export default function DashboardPage() {
 
     setClasses(updatedClasses);
 
+    // 🆕 AUTO-SAVE TO NEON (DEBOUNCED)
     const updatedClass = updatedClasses.find(c => c.id === activeClassId);
     if (updatedClass) {
-      saveClass(updatedClass);
+      debouncedSave(updatedClass);
     }
   };
 
-  // Add this function in your dashboard page
-  // Put it right AFTER handleToggleAttendance (around line 380)
 
   const handleIncrementAttendance = (studentId: number, day: number) => {
     if (!activeClassId) return;
@@ -476,9 +538,7 @@ export default function DashboardPage() {
             if (student.id === studentId) {
               const currentStatus = student.attendance[dateKey];
 
-              // Only increment if there's already a status
               if (currentStatus) {
-                // If it's already an object with count, increment
                 if (typeof currentStatus === 'object' && 'count' in currentStatus) {
                   return {
                     ...student,
@@ -491,14 +551,13 @@ export default function DashboardPage() {
                     }
                   };
                 } else {
-                  // Convert old format (string) to new format (object with count 2)
                   return {
                     ...student,
                     attendance: {
                       ...student.attendance,
                       [dateKey]: {
-                        status: currentStatus as 'P' | 'A' | 'L',
-                        count: 2 // First right-click makes it 2
+                        status: currentStatus as "P" | "A" | "L",
+                        count: 2
                       }
                     }
                   };
@@ -513,11 +572,13 @@ export default function DashboardPage() {
 
     setClasses(updatedClasses);
 
+    // 🆕 AUTO-SAVE TO NEON (DEBOUNCED)
     const updatedClass = updatedClasses.find(c => c.id === activeClassId);
     if (updatedClass) {
-      saveClass(updatedClass);
+      debouncedSave(updatedClass);
     }
   };
+
 
   const handleAddColumn = () => {
     if (!newColumnLabel.trim() || !activeClassId) return;
@@ -535,14 +596,14 @@ export default function DashboardPage() {
     );
 
     setClasses(updatedClasses);
-
     setNewColumnLabel('');
     setNewColumnType('text');
     setShowAddColumnModal(false);
 
+    // 🆕 AUTO-SAVE TO NEON
     const updatedClass = updatedClasses.find(c => c.id === activeClassId);
     if (updatedClass) {
-      saveClass(updatedClass);
+      debouncedSave(updatedClass);
     }
   };
 
@@ -564,9 +625,10 @@ export default function DashboardPage() {
 
     setClasses(updatedClasses);
 
+    // 🆕 AUTO-SAVE TO NEON
     const updatedClass = updatedClasses.find(c => c.id === activeClassId);
     if (updatedClass) {
-      saveClass(updatedClass);
+      saveClass(updatedClass); // Immediate save
     }
   };
 

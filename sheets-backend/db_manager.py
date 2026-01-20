@@ -22,6 +22,63 @@ from models import (
     AttendanceSession,
 )
 
+def parse_attendance_value(attendance_value: Any) -> dict:
+    """
+    Parse attendance value and return counts.
+    Handles all formats: string, old object, and new sessions format.
+    
+    Returns: {"present": int, "absent": int, "late": int, "total": int}
+    """
+    present = 0
+    absent = 0
+    late = 0
+    total = 0
+    
+    if not attendance_value:
+        return {"present": 0, "absent": 0, "late": 0, "total": 0}
+    
+    # NEW FORMAT: {"sessions": [...], "updatedAt": "..."}
+    if isinstance(attendance_value, dict) and "sessions" in attendance_value:
+        sessions = attendance_value.get("sessions", [])
+        for session in sessions:
+            status = session.get("status")
+            if status:
+                total += 1
+                if status == "P":
+                    present += 1
+                elif status == "A":
+                    absent += 1
+                elif status == "L":
+                    late += 1
+    
+    # OLD FORMAT: {"status": "P", "count": 2}
+    elif isinstance(attendance_value, dict) and "status" in attendance_value:
+        status = attendance_value.get("status")
+        count = attendance_value.get("count", 1)
+        total = count
+        if status == "P":
+            present = count
+        elif status == "A":
+            absent = count
+        elif status == "L":
+            late = count
+    
+    # VERY OLD FORMAT: "P" | "A" | "L"
+    elif isinstance(attendance_value, str):
+        total = 1
+        if attendance_value == "P":
+            present = 1
+        elif attendance_value == "A":
+            absent = 1
+        elif attendance_value == "L":
+            late = 1
+    
+    return {
+        "present": present,
+        "absent": absent,
+        "late": late,
+        "total": total
+    }
 
 class DatabaseManager:
     def __init__(self, base_dir: str = "data"):
@@ -294,16 +351,59 @@ class DatabaseManager:
             db.close()
 
     def delete_user(self, user_id: str) -> bool:
-        """Delete user and all associated data"""
-        db = self._get_db()
+        """
+        Delete user (teacher) and all associated data
+        Deletes: classes, class_students, QR sessions, verification codes
+        """
+        db = self.get_db()
         try:
             user = db.query(User).filter(User.id == user_id).first()
             if not user:
                 return False
+            
+            print(f"DB: Deleting user {user_id} ({user.email})")
+            
+            # Get all classes owned by this teacher
+            classes = db.query(Class).filter(Class.teacher_id == user_id).all()
+            class_ids = [cls.id for cls in classes]
+            
+            if class_ids:
+                print(f"DB: Deleting {len(class_ids)} classes")
+                
+                # Delete all class_students records
+                db.query(ClassStudent).filter(
+                    ClassStudent.class_id.in_(class_ids)
+                ).delete(synchronize_session=False)
+                
+                # Delete all QR sessions for these classes
+                db.query(QRSession).filter(
+                    QRSession.class_id.in_(class_ids)
+                ).delete(synchronize_session=False)
+                
+                # Delete all attendance sessions
+                db.query(AttendanceSession).filter(
+                    AttendanceSession.class_id.in_([str(cid) for cid in class_ids])
+                ).delete(synchronize_session=False)
+                
+                # Delete all classes
+                db.query(Class).filter(Class.id.in_(class_ids)).delete(
+                    synchronize_session=False
+                )
+            
+            # Delete verification codes
+            db.query(VerificationCode).filter(
+                VerificationCode.email == user.email
+            ).delete()
+            
+            # Delete the user
             db.delete(user)
             db.commit()
+            
+            print(f"DB: User {user_id} deleted successfully")
             return True
-        except Exception:
+            
+        except Exception as e:
+            print(f"DB: Delete user error: {e}")
             db.rollback()
             return False
         finally:
@@ -432,9 +532,8 @@ class DatabaseManager:
 
     def update_class(self, user_id: str, class_id: int, class_data: Dict[str, Any]) -> Dict[str, Any]:
         """Update an existing class"""
-        db = self._get_db()
+        db = self.get_db()
         try:
-            # Verify ownership (optional but recommended)
             cls = db.query(Class).filter(
                 Class.id == class_id,
                 Class.teacher_id == user_id  # Security check
@@ -443,10 +542,11 @@ class DatabaseManager:
             if not cls:
                 raise ValueError(f"Class {class_id} not found or you don't own it")
             
+            # Update class metadata
             cls.name = class_data.get("name", cls.name)
             cls.custom_columns = class_data.get("customColumns", cls.custom_columns)
             cls.thresholds = class_data.get("thresholds", cls.thresholds)
-            cls.enrollment_mode = class_data.get("enrollment_mode", cls.enrollment_mode)
+            cls.enrollment_mode = class_data.get("enrollmentMode", cls.enrollment_mode)
             
             # Delete and recreate students
             db.query(ClassStudent).filter(ClassStudent.class_id == class_id).delete()
@@ -459,22 +559,104 @@ class DatabaseManager:
                         name=student_data["name"],
                         roll_no=student_data.get("rollNo", ""),
                         attendance=student_data.get("attendance", {}),
-                        custom_data={
-                            k: v
-                            for k, v in student_data.items()
-                            if k not in ["id", "name", "rollNo", "attendance"]
-                        },
+                        custom_data={k: v for k, v in student_data.items() 
+                                    if k not in ["id", "name", "rollNo", "attendance"]},
                     )
                     db.add(student)
             
             db.commit()
             db.refresh(cls)
-            return self._format_class(cls, db)
+            
+            # 🆕 AUTO-CALCULATE STATISTICS
+            formatted_class = self.format_class(cls, db)
+            statistics = self.calculate_class_statistics_from_data(formatted_class)
+            formatted_class["statistics"] = statistics
+            
+            return formatted_class
+            
         except Exception as e:
             db.rollback()
             raise e
         finally:
             db.close()
+
+    def calculate_class_statistics_from_data(self, class_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Calculate statistics from class data dictionary.
+        Used after formatting class to avoid extra DB queries.
+        """
+        students = class_data.get("students", [])
+        thresholds = class_data.get("thresholds", {
+            "excellent": 95.0,
+            "good": 90.0,
+            "moderate": 85.0,
+        })
+        
+        if not students:
+            return {
+                "totalStudents": 0,
+                "avgAttendance": 0.0,
+                "excellentCount": 0,
+                "atRiskCount": 0,
+                "totalPresent": 0,
+                "totalAbsent": 0,
+                "totalLate": 0,
+                "totalSessions": 0,
+            }
+        
+        total_present = 0
+        total_absent = 0
+        total_late = 0
+        total_sessions = 0
+        
+        excellent_count = 0
+        at_risk_count = 0
+        
+        for student in students:
+            student_present = 0
+            student_absent = 0
+            student_late = 0
+            student_total = 0
+            
+            attendance_data = student.get("attendance", {})
+            
+            for date_key, attendance_value in attendance_data.items():
+                counts = parse_attendance_value(attendance_value)
+                student_present += counts["present"]
+                student_absent += counts["absent"]
+                student_late += counts["late"]
+                student_total += counts["total"]
+            
+            total_present += student_present
+            total_absent += student_absent
+            total_late += student_late
+            total_sessions += student_total
+            
+            # Student percentage
+            if student_total > 0:
+                student_percentage = ((student_present + student_late) / student_total) * 100
+                
+                if student_percentage >= thresholds.get("excellent", 95):
+                    excellent_count += 1
+                elif student_percentage < thresholds.get("moderate", 85):
+                    at_risk_count += 1
+        
+        # Average attendance
+        avg_attendance = 0.0
+        if total_sessions > 0:
+            avg_attendance = ((total_present + total_late) / total_sessions) * 100
+        
+        return {
+            "totalStudents": len(students),
+            "avgAttendance": round(avg_attendance, 2),
+            "excellentCount": excellent_count,
+            "atRiskCount": at_risk_count,
+            "totalPresent": total_present,
+            "totalAbsent": total_absent,
+            "totalLate": total_late,
+            "totalSessions": total_sessions,
+        }
+
 
     def delete_class(self, user_id: str, class_id: int) -> bool:
         """Delete a class (with ownership check)"""
@@ -640,25 +822,51 @@ class DatabaseManager:
         finally:
             db.close()
 
-    def delete_student(self, student_user_id: str) -> bool:
-        """Delete a student user and their enrollments"""
-        db = self._get_db()
+    def delete_student(self, email: str) -> bool:
+        """
+        Delete a student account from User table (where role='student')
+        Also deletes all their enrollments and class_student records
+        """
+        db = self.get_db()
         try:
-            student = (
-                db.query(StudentUser)
-                .filter(StudentUser.id == student_user_id)
-                .first()
-            )
+            # Find student in User table
+            student = db.query(User).filter(
+                User.email == email,
+                User.role == "student"
+            ).first()
+            
             if not student:
                 return False
-
-            db.query(Enrollment).filter(
-                Enrollment.student_user_id == student_user_id
+            
+            student_id = student.id
+            print(f"DB: Deleting student account {email} (ID: {student_id})")
+            
+            # Delete all enrollments
+            enrollments_deleted = db.query(Enrollment).filter(
+                Enrollment.studentuserid == student_id
             ).delete()
+            print(f"DB: Deleted {enrollments_deleted} enrollments")
+            
+            # Delete from class_students table (attendance records)
+            class_records_deleted = db.query(ClassStudent).filter(
+                ClassStudent.student_id == student_id
+            ).delete()
+            print(f"DB: Deleted {class_records_deleted} class records")
+            
+            # Delete verification codes
+            db.query(VerificationCode).filter(
+                VerificationCode.email == email
+            ).delete()
+            
+            # Finally delete the user account
             db.delete(student)
             db.commit()
+            
+            print(f"DB: Student account {email} deleted successfully")
             return True
-        except Exception:
+            
+        except Exception as e:
+            print(f"DB: Delete student account error: {e}")
             db.rollback()
             return False
         finally:
@@ -844,22 +1052,91 @@ class DatabaseManager:
             db.close()
 
     def get_student_stats(
-        self,
-        student_user_id: str,
-        class_id: int,
-        date_start: str,
-        date_end: str,
-        thresholds: Optional[Dict[str, float]] = None,
-    ) -> Dict[str, Any]:
-        """Stub: student attendance statistics per class (to be implemented properly)."""
-        return {
-            "total_classes": 0,
-            "present": 0,
-            "absent": 0,
-            "late": 0,
-            "percentage": 0.0,
-            "status": "good",
-        }
+    self,
+    student_user_id: str,
+    class_id: int,
+    date_start: str,
+    date_end: str,
+    thresholds: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
+        """
+        Calculate student attendance statistics for a specific class.
+        """
+        db = self.get_db()
+        try:
+            # Get student's attendance record
+            class_student = db.query(ClassStudent).filter(
+                ClassStudent.class_id == class_id,
+                ClassStudent.student_id == student_user_id
+            ).first()
+            
+            if not class_student:
+                return {
+                    "total_classes": 0,
+                    "present": 0,
+                    "absent": 0,
+                    "late": 0,
+                    "percentage": 0.0,
+                    "status": "good",
+                }
+            
+            attendance_data = class_student.attendance or {}
+            
+            present = 0
+            absent = 0
+            late = 0
+            total = 0
+            
+            # Parse each date's attendance
+            for date_key, attendance_value in attendance_data.items():
+                counts = parse_attendance_value(attendance_value)
+                present += counts["present"]
+                absent += counts["absent"]
+                late += counts["late"]
+                total += counts["total"]
+            
+            # Calculate percentage
+            percentage = 0.0
+            if total > 0:
+                percentage = ((present + late) / total) * 100
+            
+            # Determine status
+            if not thresholds:
+                thresholds = {
+                    "excellent": 95.0,
+                    "good": 90.0,
+                    "moderate": 85.0,
+                }
+            
+            status = "at-risk"
+            if percentage >= thresholds.get("excellent", 95):
+                status = "excellent"
+            elif percentage >= thresholds.get("good", 90):
+                status = "good"
+            elif percentage >= thresholds.get("moderate", 85):
+                status = "moderate"
+            
+            return {
+                "total_classes": total,
+                "present": present,
+                "absent": absent,
+                "late": late,
+                "percentage": round(percentage, 2),
+                "status": status,
+            }
+            
+        except Exception as e:
+            print(f"Get student stats error: {e}")
+            return {
+                "total_classes": 0,
+                "present": 0,
+                "absent": 0,
+                "late": 0,
+                "percentage": 0.0,
+                "status": "good",
+            }
+        finally:
+            db.close()
 
     def get_student_day_attendance(self, user_id: str, class_id: str, student_id: str, date: str) -> List[Dict[str, Any]]:
         """Get student's attendance for a specific day across all sessions"""
@@ -1262,21 +1539,121 @@ class DatabaseManager:
     # ==================== STATS / ANALYTICS (stubs) ====================
 
     def calculate_class_statistics(
-        self,
-        teacher_id: str,
-        class_id: int,
-        date_start: str,
-        date_end: str,
-        thresholds: Optional[Dict[str, float]] = None,
-    ) -> Dict[str, Any]:
-        """Stub: high-level stats for a class."""
-        return {
-            "total_classes": 0,
-            "total_students": 0,
-            "avg_attendance": 0.0,
-            "excellent": 0,
-            "at_risk": 0,
-        }
+    self,
+    teacher_id: str,
+    class_id: int,
+    date_start: str,
+    date_end: str,
+    thresholds: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
+        """
+        Calculate comprehensive class statistics.
+        """
+        db = self.get_db()
+        try:
+            # Get class with students
+            cls = db.query(Class).filter(
+                Class.id == class_id,
+                Class.teacher_id == teacher_id
+            ).first()
+            
+            if not cls:
+                return {
+                    "total_classes": 0,
+                    "total_students": 0,
+                    "avg_attendance": 0.0,
+                    "excellent": 0,
+                    "at_risk": 0,
+                }
+            
+            students = db.query(ClassStudent).filter(
+                ClassStudent.class_id == class_id
+            ).all()
+            
+            if not students:
+                return {
+                    "total_classes": 0,
+                    "total_students": len(students),
+                    "avg_attendance": 0.0,
+                    "excellent": 0,
+                    "at_risk": 0,
+                }
+            
+            # Set default thresholds
+            if not thresholds:
+                thresholds = {
+                    "excellent": 95.0,
+                    "good": 90.0,
+                    "moderate": 85.0,
+                }
+            
+            total_present = 0
+            total_absent = 0
+            total_late = 0
+            total_sessions = 0
+            
+            excellent_count = 0
+            at_risk_count = 0
+            
+            # Calculate for each student
+            for student in students:
+                student_present = 0
+                student_absent = 0
+                student_late = 0
+                student_total = 0
+                
+                attendance_data = student.attendance or {}
+                
+                for date_key, attendance_value in attendance_data.items():
+                    # Parse attendance value using helper
+                    counts = parse_attendance_value(attendance_value)
+                    student_present += counts["present"]
+                    student_absent += counts["absent"]
+                    student_late += counts["late"]
+                    student_total += counts["total"]
+                
+                # Add to totals
+                total_present += student_present
+                total_absent += student_absent
+                total_late += student_late
+                total_sessions += student_total
+                
+                # Calculate student percentage
+                if student_total > 0:
+                    student_percentage = ((student_present + student_late) / student_total) * 100
+                    
+                    if student_percentage >= thresholds.get("excellent", 95):
+                        excellent_count += 1
+                    elif student_percentage < thresholds.get("moderate", 85):
+                        at_risk_count += 1
+            
+            # Calculate average attendance
+            avg_attendance = 0.0
+            if total_sessions > 0:
+                avg_attendance = ((total_present + total_late) / total_sessions) * 100
+            
+            return {
+                "total_classes": total_sessions,
+                "total_students": len(students),
+                "avg_attendance": round(avg_attendance, 2),
+                "excellent": excellent_count,
+                "at_risk": at_risk_count,
+                "total_present": total_present,
+                "total_absent": total_absent,
+                "total_late": total_late,
+            }
+            
+        except Exception as e:
+            print(f"Calculate class statistics error: {e}")
+            return {
+                "total_classes": 0,
+                "total_students": 0,
+                "avg_attendance": 0.0,
+                "excellent": 0,
+                "at_risk": 0,
+            }
+        finally:
+            db.close()
 
     def get_class_day_stats(
         self,
