@@ -105,6 +105,7 @@ export const ImportDataState: React.FC<ImportDataStateProps> = ({
         customColumns: [],
         thresholds: defaultThresholds,
         enrollment_mode: selectedMode,
+        class: null,
       };
       onImport(newClass);
     }
@@ -154,7 +155,7 @@ export const ImportDataState: React.FC<ImportDataStateProps> = ({
 
     // Get all column names from the first row
     const columns = Object.keys(data[0]);
-    
+
     // Smart column detection function
     const detectColumn = (possibleNames: string[]) => {
       return columns.find(col =>
@@ -196,12 +197,12 @@ export const ImportDataState: React.FC<ImportDataStateProps> = ({
         rollNo: rollNoCol ? String(row[rollNoCol] || '').trim() : '',
         attendance: {},
       };
-      
+
       // Add email if detected
       if (emailCol && row[emailCol]) {
         (student as any).email = String(row[emailCol]).trim();
       }
-      
+
       return student;
     }).filter(s => s.name);
 
@@ -244,6 +245,7 @@ export const ImportDataState: React.FC<ImportDataStateProps> = ({
       customColumns: [],
       thresholds: defaultThresholds,
       enrollment_mode: 'import_data',
+      class: null,
     };
     onImport(newClass);
   };
@@ -318,11 +320,10 @@ NOTE: Column Detection - Name columns: "Name", "Student Name", "Full Name", "Stu
                         {mode.features.map((feature, idx) => (
                           <li
                             key={idx}
-                            className={`text-xs font-medium sm:text-sm font-medium ${
-                              feature.startsWith('✗')
+                            className={`text-xs font-medium sm:text-sm font-medium ${feature.startsWith('✗')
                                 ? 'text-rose-400'
                                 : 'text-black'
-                            }`}
+                              }`}
                           >
                             {feature}
                           </li>
@@ -458,11 +459,10 @@ NOTE: Column Detection - Name columns: "Name", "Student Name", "Full Name", "Stu
                     onDragEnter={handleDrag}
                     onDragLeave={handleDrag}
                     onDragOver={handleDrag}
-                    className={`relative border-2 border-dashed rounded-2xl p-12 sm:p-16 text-center transition-all ${
-                      dragActive
+                    className={`relative border-2 border-dashed rounded-2xl p-12 sm:p-16 text-center transition-all ${dragActive
                         ? 'border-emerald-500 bg-emerald-50'
                         : 'border-gray-300 hover:border-emerald-400 hover:bg-emerald-50/50'
-                    }`}
+                      }`}
                   >
                     <input
                       type="file"
