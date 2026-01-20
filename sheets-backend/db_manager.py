@@ -236,7 +236,7 @@ class DatabaseManager:
             }
         finally:
             db.close()
-            
+
     # Convenience wrapper expected by main.py
     def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
         return self.get_user_by_id(user_id)
@@ -568,7 +568,7 @@ class DatabaseManager:
             db.refresh(cls)
             
             # 🆕 AUTO-CALCULATE STATISTICS
-            formatted_class = self.format_class(cls, db)
+            formatted_class = self._format_class(cls, db)
             statistics = self.calculate_class_statistics_from_data(formatted_class)
             formatted_class["statistics"] = statistics
             
