@@ -673,9 +673,9 @@ async def verify_email(request: VerifyEmailRequest):
         role = stored_data.get("role", "teacher")
         
         if role == "student":
-            user_id = f"student_{int(datetime.utcnow().timestamp())}"
+            user_id = int(datetime.utcnow().timestamp() * 1000)
         else:
-            user_id = f"user_{int(datetime.utcnow().timestamp())}"
+            user_id = int(datetime.utcnow().timestamp() * 1000)
         
         db.create_user(
             user_id=user_id,
@@ -1044,7 +1044,7 @@ async def verify_student_email(request: VerifyEmailRequest):
         if stored_data["code"] != request.code:
             raise HTTPException(status_code=400, detail="Invalid verification code")
         
-        student_id = f"student_{int(datetime.utcnow().timestamp())}"
+        student_id = int(datetime.utcnow().timestamp() * 1000)
         db.create_user(
             user_id=student_id,
             email=request.email,
@@ -1444,7 +1444,7 @@ async def verify_email(request: VerifyEmailRequest):
         
         # Create user based on role
         if role == "student":
-            user_id = f"student_{int(datetime.utcnow().timestamp())}"
+            user_id = int(datetime.utcnow().timestamp() * 1000)
             user_data = db.create_student(
                 student_id=user_id,
                 email=request.email,
@@ -1452,7 +1452,7 @@ async def verify_email(request: VerifyEmailRequest):
                 password_hash=stored_data["password"]
             )
         else:
-            user_id = f"user_{int(datetime.utcnow().timestamp())}"
+            user_id = int(datetime.utcnow().timestamp() * 1000)
             user_data = db.create_user(
                 user_id=user_id,
                 email=request.email,
