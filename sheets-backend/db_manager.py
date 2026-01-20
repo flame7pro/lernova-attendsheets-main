@@ -103,6 +103,60 @@ class DatabaseManager:
         finally:
             db.close()
 
+    def is_trusted_device(self, userdata: Dict[str, Any], device_id: str) -> bool:
+        """Check if device is trusted."""
+        trusted_devices = userdata.get('trusted_devices', [])
+        return any(d.get('id') == device_id for d in trusted_devices)
+
+    def add_trusted_device(self, user_id: str, device_info: Dict[str, Any]) -> bool:
+        """Add a trusted device for a user"""
+        db = self._get_db()
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                return False
+            
+            trusted_devices = user.device_info.get('trusted_devices', []) if user.device_info else []
+            device_id = device_info.get('id')
+            
+            # Check if device already exists
+            device_exists = False
+            for device in trusted_devices:
+                if device.get('id') == device_id:
+                    device['last_seen'] = datetime.utcnow().isoformat()
+                    device['login_count'] = device.get('login_count', 0) + 1
+                    device_exists = True
+                    break
+            
+            if not device_exists:
+                new_device = {
+                    'id': device_id,
+                    'name': device_info.get('name', 'Unknown Device'),
+                    'browser': device_info.get('browser', 'Unknown'),
+                    'os': device_info.get('os', 'Unknown'),
+                    'device': device_info.get('device', 'Unknown'),
+                    'first_seen': datetime.utcnow().isoformat(),
+                    'last_seen': datetime.utcnow().isoformat(),
+                    'login_count': 1
+                }
+                trusted_devices.append(new_device)
+            
+            # Update user's device_info
+            if not user.device_info:
+                user.device_info = {}
+            user.device_info['trusted_devices'] = trusted_devices
+            
+            db.commit()
+            return True
+            
+        except Exception as e:
+            print(f"Add trusted device error: {e}")
+            db.rollback()
+            return False
+        finally:
+            db.close()
+
+
     def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get user by ID"""
         db = self._get_db()
@@ -305,16 +359,22 @@ class DatabaseManager:
         finally:
             db.close()
 
-    def get_class_sessions(self, class_id: int):
-        """Get all sessions for a class"""
+    def get_class_sessions(self, class_id: int, date_start: Optional[str] = None, date_end: Optional[str] = None,) -> List[Dict[str, Any]]:
+        """Get all sessions for a class, optionally filtered by date range."""
         db = self._get_db()
         try:
-            sessions = (
-                db.query(AttendanceSession)
-                .filter(AttendanceSession.class_id == str(class_id))
-                .order_by(AttendanceSession.date.desc())
-                .all()
+            query = db.query(AttendanceSession).filter(
+                AttendanceSession.class_id == str(class_id)
             )
+
+            # Optional date filtering if main.py sends extra args
+            if date_start:
+                query = query.filter(AttendanceSession.date >= date_start)
+            if date_end:
+                query = query.filter(AttendanceSession.date <= date_end)
+
+            sessions = query.order_by(AttendanceSession.date.desc()).all()
+
             return [
                 {
                     "id": session.id,
@@ -952,28 +1012,31 @@ class DatabaseManager:
     # ==================== VERIFICATION CODE OPERATIONS ====================
 
     def save_verification_code(
-        self, email: str, code: str, purpose: str, expires_at: datetime
+        self, email: str, code: str, purpose: str, expires_at: datetime, extra_data: Dict = None
     ) -> bool:
-        """Save verification code"""
+        """Save verification code with optional extra data"""
         db = self._get_db()
         try:
+            # Delete old codes
             db.query(VerificationCode).filter(
                 and_(
                     VerificationCode.email == email,
                     VerificationCode.purpose == purpose,
                 )
             ).delete()
-
+            
             verification = VerificationCode(
                 email=email,
                 code=code,
                 purpose=purpose,
                 expires_at=expires_at,
+                extra_data=extra_data or {}  # ADD THIS
             )
             db.add(verification)
             db.commit()
             return True
-        except Exception:
+        except Exception as e:
+            print(f"Save verification error: {e}")
             db.rollback()
             return False
         finally:
@@ -982,7 +1045,7 @@ class DatabaseManager:
     def get_verification_code(
         self, email: str, purpose: str
     ) -> Optional[Dict[str, Any]]:
-        """Get verification code"""
+        """Get verification code with extra_data"""
         db = self._get_db()
         try:
             code = db.query(VerificationCode).filter(
@@ -992,16 +1055,22 @@ class DatabaseManager:
                     VerificationCode.expires_at > datetime.utcnow(),
                 )
             ).first()
-
+            
             if not code:
                 return None
-
-            return {
+            
+            result = {
                 "email": code.email,
                 "code": code.code,
                 "purpose": code.purpose,
                 "expires_at": code.expires_at.isoformat(),
             }
+            
+            # Merge extra_data (password_hash, name, role, device_info)
+            if hasattr(code, 'extra_data') and code.extra_data:
+                result.update(code.extra_data)
+            
+            return result
         finally:
             db.close()
 

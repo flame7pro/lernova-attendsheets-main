@@ -55,10 +55,6 @@ FROM_EMAIL = os.getenv("FROM_EMAIL")
 configuration = sib_api_v3_sdk.Configuration()
 configuration.api_key['api-key'] = BREVO_API_KEY
 
-# Temporary storage for verification codes (in production, use Redis or similar)
-verification_codes = {}
-password_reset_codes = {}
-
 # ==================== PYDANTIC MODELS ====================
 
 class LoginRequest(BaseModel):
@@ -630,91 +626,67 @@ def get_stats():
 
 @app.post("/auth/signup")
 async def signup(request: SignupRequest):
-    """
-    Sign up TEACHER - No device fingerprinting.
-    """
     try:
-        # Check if user already exists
         existing_user = db.get_user_by_email(request.email)
         if existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User with this email already exists"
-            )
-
+            raise HTTPException(status_code=400, detail="User with this email already exists")
+        
         if len(request.password) < 8:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Password must be at least 8 characters long"
-            )
-
-        # Generate verification code
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+        
         code = generate_verification_code()
-        print(f"✅ TEACHER SIGNUP: {request.email} (Code: {code})")
-
-        # Store verification code (NO device info for teachers)
-        verification_codes[request.email] = {
-            "code": code,
-            "name": request.name,
-            "password": get_password_hash(request.password),
-            "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
-        }
-
-        # Send verification email
+        password_hash = get_password_hash(request.password)
+        expires_at = datetime.utcnow() + timedelta(minutes=15)
+        
+        db.save_verification_code(
+            email=request.email,
+            code=code,
+            purpose="email_verification",
+            expires_at=expires_at,
+            extra_data={
+                "name": request.name,
+                "password_hash": password_hash,
+                "role": "teacher"
+            }
+        )
+        
         email_sent = send_verification_email(request.email, code, request.name)
-
-        return {
-            "success": True,
-            "message": "Verification code sent to your email" if email_sent else f"Code: {code}"
-        }
+        return {"success": True, "message": "Verification code sent to your email" if email_sent else f"Code: {code}"}
+    
     except HTTPException:
         raise
     except Exception as e:
         print(f"Signup error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Signup failed: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Signup failed: {str(e)}")
 
 @app.post("/auth/verify-email", response_model=TokenResponse)
 async def verify_email(request: VerifyEmailRequest):
-    """Verify email with code"""
     try:
-        if request.email not in verification_codes:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No verification code found"
-            )
+        stored_data = db.get_verification_code(request.email, "email_verification")
         
-        stored_data = verification_codes[request.email]
-        expires_at = datetime.fromisoformat(stored_data["expires_at"])
-        
-        if datetime.utcnow() > expires_at:
-            del verification_codes[request.email]
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Verification code expired"
-            )
+        if not stored_data:
+            raise HTTPException(status_code=400, detail="No verification code found or code expired")
         
         if stored_data["code"] != request.code:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid verification code"
-            )
+            raise HTTPException(status_code=400, detail="Invalid verification code")
         
-        # Create user in database
-        user_id = f"user_{int(datetime.utcnow().timestamp())}"
-        user_data = db.create_user(
+        role = stored_data.get("role", "teacher")
+        
+        if role == "student":
+            user_id = f"student_{int(datetime.utcnow().timestamp())}"
+        else:
+            user_id = f"user_{int(datetime.utcnow().timestamp())}"
+        
+        db.create_user(
             user_id=user_id,
             email=request.email,
+            password_hash=stored_data["password_hash"],
             name=stored_data["name"],
-            password_hash=stored_data["password"]
+            role=role
         )
         
-        # Clean up verification code
-        del verification_codes[request.email]
+        db.delete_verification_code(request.email, "email_verification")
         
-        # Create access token
         access_token = create_access_token(
             data={"sub": request.email},
             expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -724,15 +696,12 @@ async def verify_email(request: VerifyEmailRequest):
             access_token=access_token,
             user=UserResponse(id=user_id, email=request.email, name=stored_data["name"])
         )
+    
     except HTTPException:
         raise
     except Exception as e:
         print(f"Verification error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Verification failed: {str(e)}"
-        )
-
+        raise HTTPException(status_code=500, detail=f"Verification failed: {str(e)}")
 
 @app.post("/auth/login", response_model=TokenResponse)
 async def login(request: LoginRequest):
@@ -768,188 +737,170 @@ async def login(request: LoginRequest):
 
 @app.post("/auth/resend-verification")
 async def resend_verification(request: ResendVerificationRequest):
-    """Resend verification code"""
     try:
-        # Check if there's already a pending verification for this email
-        if request.email not in verification_codes:
-            # Check if user already exists
+        stored_data = db.get_verification_code(request.email, "email_verification")
+        
+        if not stored_data:
             existing_user = db.get_user_by_email(request.email)
             if existing_user:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Email already verified"
-                )
+                raise HTTPException(status_code=400, detail="Email already verified")
             else:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="No pending verification found for this email"
-                )
+                raise HTTPException(status_code=400, detail="No pending verification found for this email")
         
-        # Get the stored data
-        stored_data = verification_codes[request.email]
-        
-        # Generate new code
         code = generate_verification_code()
-        print(f"New verification code for {request.email}: {code}")
+        expires_at = datetime.utcnow() + timedelta(minutes=15)
         
-        # Update the stored verification code with new code and expiry
-        verification_codes[request.email] = {
-            "code": code,
-            "name": stored_data["name"],
-            "password": stored_data["password"],
-            "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
-        }
+        # Keep existing data, just update code and expiry
+        extra_data = {k: v for k, v in stored_data.items() if k not in ['code', 'expires_at', 'email', 'purpose']}
         
-        # Send new verification email
-        email_sent = send_verification_email(request.email, code, stored_data["name"])
+        db.save_verification_code(
+            email=request.email,
+            code=code,
+            purpose="email_verification",
+            expires_at=expires_at,
+            extra_data=extra_data
+        )
         
-        return {
-            "success": True,
-            "message": "New verification code sent to your email" if email_sent else f"Code: {code}"
-        }
+        email_sent = send_verification_email(request.email, code, extra_data.get("name", "User"))
+        return {"success": True, "message": "New verification code sent to your email" if email_sent else f"Code: {code}"}
+    
     except HTTPException:
         raise
     except Exception as e:
         print(f"Resend verification error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to resend verification code: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail="Failed to resend verification code")
 
 @app.post("/auth/request-password-reset")
 async def request_password_reset(request: PasswordResetRequest):
-    """Request password reset code"""
-    user = db.get_user_by_email(request.email)
+    try:
+        user = db.get_user_by_email(request.email)
+        if not user:
+            return {"success": True, "message": "If account exists, reset code sent"}
+        
+        code = generate_verification_code()
+        expires_at = datetime.utcnow() + timedelta(minutes=15)
+        
+        db.save_verification_code(
+            email=request.email,
+            code=code,
+            purpose="password_reset",
+            expires_at=expires_at,
+            extra_data={}
+        )
+        
+        send_password_reset_email(request.email, code, user["name"])
+        return {"success": True, "message": "Reset code sent to your email"}
     
-    if not user:
-        # Don't reveal if email exists
-        return {"success": True, "message": "If account exists, reset code sent"}
-    
-    code = generate_verification_code()
-    print(f"Password reset code for {request.email}: {code}")
-    
-    password_reset_codes[request.email] = {
-        "code": code,
-        "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
-    }
-    
-    send_password_reset_email(request.email, code, user["name"])
-    
-    return {"success": True, "message": "Reset code sent to your email"}
-
+    except Exception as e:
+        print(f"Password reset request error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process password reset request")
 
 @app.post("/auth/reset-password")
 async def reset_password(request: VerifyResetCodeRequest):
-    """Reset password with code"""
-    if request.email not in password_reset_codes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No reset code found"
-        )
+    try:
+        stored_data = db.get_verification_code(request.email, "password_reset")
+        
+        if not stored_data:
+            raise HTTPException(status_code=400, detail="No reset code found or code expired")
+        
+        if stored_data["code"] != request.code:
+            raise HTTPException(status_code=400, detail="Invalid reset code")
+        
+        if len(request.new_password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+        
+        user = db.get_user_by_email(request.email)
+        if user:
+            new_password_hash = get_password_hash(request.new_password)
+            db.update_user_password(request.email, new_password_hash)
+        
+        db.delete_verification_code(request.email, "password_reset")
+        return {"success": True, "message": "Password reset successfully"}
     
-    stored_data = password_reset_codes[request.email]
-    expires_at = datetime.fromisoformat(stored_data["expires_at"])
-    
-    if datetime.utcnow() > expires_at:
-        del password_reset_codes[request.email]
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Reset code expired"
-        )
-    
-    if stored_data["code"] != request.code:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid reset code"
-        )
-    
-    if len(request.new_password) < 8:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Password must be at least 8 characters"
-        )
-    
-    # Update password in database
-    user = db.get_user_by_email(request.email)
-    if user:
-        db.update_user(user["id"], password=get_password_hash(request.new_password))
-    
-    del password_reset_codes[request.email]
-    
-    return {"success": True, "message": "Password reset successfully"}
-
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Reset password error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reset password")
 
 @app.post("/auth/change-password")
 async def change_password(request: ChangePasswordRequest, email: str = Depends(verify_token)):
-    """Change password for logged-in user - supports both teachers and students"""
-    if email not in password_reset_codes:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No verification code found")
+    try:
+        stored_data = db.get_verification_code(email, "password_change")
+        
+        if not stored_data:
+            raise HTTPException(status_code=400, detail="No verification code found")
+        
+        if stored_data["code"] != request.code:
+            raise HTTPException(status_code=400, detail="Invalid verification code")
+        
+        if len(request.new_password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+        
+        user = db.get_user_by_email(email)
+        if user:
+            new_password_hash = get_password_hash(request.new_password)
+            db.update_user_password(email, new_password_hash)
+            db.delete_verification_code(email, "password_change")
+            return {"success": True, "message": "Password changed successfully"}
+        
+        student = db.get_student_by_email(email)
+        if student:
+            new_password_hash = get_password_hash(request.new_password)
+            db.update_user_password(email, new_password_hash)
+            db.delete_verification_code(email, "password_change")
+            return {"success": True, "message": "Password changed successfully"}
+        
+        raise HTTPException(status_code=404, detail="User not found")
     
-    stored_data = password_reset_codes[email]
-    expires_at = datetime.fromisoformat(stored_data["expires_at"])
-    
-    if datetime.utcnow() > expires_at:
-        del password_reset_codes[email]
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Verification code expired")
-    
-    if stored_data["code"] != request.code:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid verification code")
-    
-    if len(request.new_password) < 8:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be at least 8 characters")
-    
-    # Try to find as teacher first
-    user = db.get_user_by_email(email)
-    if user:
-        db.update_user(user["id"], password=get_password_hash(request.new_password))
-        del password_reset_codes[email]
-        return {"success": True, "message": "Password changed successfully"}
-    
-    # Try to find as student
-    student = db.get_student_by_email(email)
-    if student:
-        db.update_student(student["id"], {"password": get_password_hash(request.new_password)})
-        del password_reset_codes[email]
-        return {"success": True, "message": "Password changed successfully"}
-    
-    # Not found in either
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Change password error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to change password")
 
 @app.post("/auth/request-change-password")
 async def request_change_password(email: str = Depends(verify_token)):
-    """Request verification code for password change - supports both teachers and students"""
-    # Try to find as teacher first
-    user = db.get_user_by_email(email)
-    if user:
-        code = generate_verification_code()
-        print(f"Password change code for {email}: {code}")
+    try:
+        user = db.get_user_by_email(email)
+        if user:
+            code = generate_verification_code()
+            expires_at = datetime.utcnow() + timedelta(minutes=15)
+            
+            db.save_verification_code(
+                email=email,
+                code=code,
+                purpose="password_change",
+                expires_at=expires_at,
+                extra_data={}
+            )
+            
+            send_password_reset_email(email, code, user["name"])
+            return {"success": True, "message": "Verification code sent"}
         
-        password_reset_codes[email] = {
-            "code": code,
-            "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
-        }
+        student = db.get_student_by_email(email)
+        if student:
+            code = generate_verification_code()
+            expires_at = datetime.utcnow() + timedelta(minutes=15)
+            
+            db.save_verification_code(
+                email=email,
+                code=code,
+                purpose="password_change",
+                expires_at=expires_at,
+                extra_data={}
+            )
+            
+            send_password_reset_email(email, code, student["name"])
+            return {"success": True, "message": "Verification code sent"}
         
-        send_password_reset_email(email, code, user["name"])
-        return {"success": True, "message": "Verification code sent"}
+        raise HTTPException(status_code=404, detail="User not found")
     
-    # Try to find as student
-    student = db.get_student_by_email(email)
-    if student:
-        code = generate_verification_code()
-        print(f"Password change code for {email}: {code}")
-        
-        password_reset_codes[email] = {
-            "code": code,
-            "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
-        }
-        
-        send_password_reset_email(email, code, student["name"])
-        return {"success": True, "message": "Verification code sent"}
-    
-    # Not found in either
-    raise HTTPException(status_code=404, detail="User not found")
-
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Request change password error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send verification code")
 
 @app.put("/auth/update-profile")
 async def update_profile(request: UpdateProfileRequest, email: str = Depends(verify_token)):
@@ -1031,26 +982,14 @@ async def delete_account(email: str = Depends(verify_token)):
 
 @app.post("/auth/student/signup")
 async def student_signup(request: SignupRequest):
-    """
-    Sign up STUDENT - Device fingerprinting enabled.
-    First device is automatically trusted.
-    """
     try:
-        # Check if user already exists
         existing_user = db.get_student_by_email(request.email)
         if existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User with this email already exists"
-            )
-
+            raise HTTPException(status_code=400, detail="User with this email already exists")
+        
         if len(request.password) < 8:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Password must be at least 8 characters long"
-            )
-
-        # Generate verification code
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+        
         code = generate_verification_code()
         
         if request.device_id and request.device_info:
@@ -1058,109 +997,80 @@ async def student_signup(request: SignupRequest):
             print(f"   Device: {request.device_info.get('name')} (ID: {request.device_id})")
         else:
             print(f"📱 STUDENT SIGNUP: {request.email} (no device info)")
-
-        # Store verification code WITH device info for students
-        verification_codes[request.email] = {
-            "code": code,
-            "name": request.name,
-            "password": get_password_hash(request.password),
-            "role": "student",
-            "device_id": request.device_id if request.device_id else None,
-            "device_info": request.device_info if request.device_info else None,
-            "expires_at": (datetime.utcnow() + timedelta(minutes=15)).isoformat()
-        }
-
-        # Send verification email
+        
+        password_hash = get_password_hash(request.password)
+        expires_at = datetime.utcnow() + timedelta(minutes=15)
+        
+        db.save_verification_code(
+            email=request.email,
+            code=code,
+            purpose="email_verification",
+            expires_at=expires_at,
+            extra_data={
+                "name": request.name,
+                "password_hash": password_hash,
+                "role": "student",
+                "device_id": request.device_id if request.device_id else None,
+                "device_info": request.device_info if request.device_info else None
+            }
+        )
+        
         email_sent = send_verification_email(request.email, code, request.name)
-
-        return {
-            "success": True,
-            "message": "Verification code sent to your email" if email_sent else f"Code: {code}"
-        }
+        return {"success": True, "message": "Verification code sent to your email" if email_sent else f"Code: {code}"}
+    
     except HTTPException:
         raise
     except Exception as e:
         print(f"Student signup error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Signup failed: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Signup failed: {str(e)}")
 
 @app.post("/auth/student/verify-email", response_model=TokenResponse)
 async def verify_student_email(request: VerifyEmailRequest):
-    """
-    Verify student email and automatically trust their first device.
-    """
     try:
-        if request.email not in verification_codes:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No verification code found"
-            )
-
-        stored_data = verification_codes[request.email]
-
-        # Ensure this is a student verification
+        stored_data = db.get_verification_code(request.email, "email_verification")
+        
+        if not stored_data:
+            raise HTTPException(status_code=400, detail="No verification code found or code expired")
+        
         if stored_data.get("role") != "student":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid verification attempt"
-            )
-
-        # Check expiration
-        expires_at = datetime.fromisoformat(stored_data["expires_at"])
-        if datetime.utcnow() > expires_at:
-            del verification_codes[request.email]
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Verification code expired"
-            )
-
-        # Check code
+            raise HTTPException(status_code=400, detail="Invalid verification attempt")
+        
         if stored_data["code"] != request.code:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid verification code"
-            )
-
-        # Create student in database
+            raise HTTPException(status_code=400, detail="Invalid verification code")
+        
         student_id = f"student_{int(datetime.utcnow().timestamp())}"
-        student_data = db.create_student(
-            student_id=student_id,
+        db.create_user(
+            user_id=student_id,
             email=request.email,
+            password_hash=stored_data["password_hash"],
             name=stored_data["name"],
-            password_hash=stored_data["password"]
+            role="student",
+            device_id=stored_data.get("device_id"),
+            device_info=stored_data.get("device_info")
         )
-
-        # 🔐 Add first device as trusted if device info was provided
+        
         if stored_data.get("device_id") and stored_data.get("device_info"):
-            add_trusted_device(student_id, stored_data["device_info"])
+            db.add_trusted_device(student_id, stored_data["device_info"])
             print(f"✅ First device auto-trusted for student: {request.email}")
             print(f"   Device: {stored_data['device_info'].get('name')}")
-
-        # Clean up verification code
-        del verification_codes[request.email]
-
-        # Create access token
+        
+        db.delete_verification_code(request.email, "email_verification")
+        
         access_token = create_access_token(
             data={"sub": request.email, "role": "student"},
             expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         )
-
+        
         return TokenResponse(
             access_token=access_token,
             user=UserResponse(id=student_id, email=request.email, name=stored_data["name"])
         )
+    
     except HTTPException:
         raise
     except Exception as e:
         print(f"Student verification error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Verification failed: {str(e)}"
-        )
-
-# main.py - Update student_login function
+        raise HTTPException(status_code=500, detail=f"Verification failed: {str(e)}")
 
 @app.post("/auth/student/login", response_model=TokenResponse)
 async def student_login(request: LoginRequest):

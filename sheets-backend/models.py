@@ -19,6 +19,7 @@ class User(Base):
     device_id = Column(String, nullable=True)
     device_info = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    trusted_devices = Column(JSON, default=list)
 
 class Class(Base):
     __tablename__ = "classes"
