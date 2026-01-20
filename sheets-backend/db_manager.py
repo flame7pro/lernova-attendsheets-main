@@ -452,10 +452,22 @@ class DatabaseManager:
 
     def get_all_classes(self, teacher_id: str) -> List[Dict[str, Any]]:
         """Get all classes for a teacher"""
-        db = self._get_db()
+        db = self._get_db()  # ✅ FIXED (was get_db)
         try:
             classes = db.query(Class).filter(Class.teacher_id == teacher_id).all()
-            return [self._format_class(cls, db) for cls in classes]
+            
+            # ✅ Format AND calculate statistics for each class
+            result = []
+            for cls in classes:
+                formatted_class = self._format_class(cls, db)
+                
+                # ✅ ALWAYS calculate fresh statistics
+                statistics = self.calculate_class_statistics_from_data(formatted_class)
+                formatted_class["statistics"] = statistics
+                
+                result.append(formatted_class)
+            
+            return result
         finally:
             db.close()
 
