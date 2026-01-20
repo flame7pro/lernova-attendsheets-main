@@ -636,7 +636,7 @@ async def signup(request: SignupRequest):
         
         code = generate_verification_code()
         password_hash = get_password_hash(request.password)
-        expires_at = datetime.utcnow() + timedelta(minutes=15)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
         
         db.save_verification_code(
             email=request.email,
@@ -749,7 +749,7 @@ async def resend_verification(request: ResendVerificationRequest):
                 raise HTTPException(status_code=400, detail="No pending verification found for this email")
         
         code = generate_verification_code()
-        expires_at = datetime.utcnow() + timedelta(minutes=15)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
         
         # Keep existing data, just update code and expiry
         extra_data = {k: v for k, v in stored_data.items() if k not in ['code', 'expires_at', 'email', 'purpose']}
@@ -779,7 +779,7 @@ async def request_password_reset(request: PasswordResetRequest):
             return {"success": True, "message": "If account exists, reset code sent"}
         
         code = generate_verification_code()
-        expires_at = datetime.utcnow() + timedelta(minutes=15)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
         
         db.save_verification_code(
             email=request.email,
@@ -866,7 +866,7 @@ async def request_change_password(email: str = Depends(verify_token)):
         user = db.get_user_by_email(email)
         if user:
             code = generate_verification_code()
-            expires_at = datetime.utcnow() + timedelta(minutes=15)
+            expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
             
             db.save_verification_code(
                 email=email,
@@ -882,7 +882,7 @@ async def request_change_password(email: str = Depends(verify_token)):
         student = db.get_student_by_email(email)
         if student:
             code = generate_verification_code()
-            expires_at = datetime.utcnow() + timedelta(minutes=15)
+            expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
             
             db.save_verification_code(
                 email=email,
@@ -1006,7 +1006,7 @@ async def student_signup(request: SignupRequest):
             print(f"📱 STUDENT SIGNUP: {request.email} (no device info)")
         
         password_hash = get_password_hash(request.password)
-        expires_at = datetime.utcnow() + timedelta(minutes=15)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
         
         db.save_verification_code(
             email=request.email,
