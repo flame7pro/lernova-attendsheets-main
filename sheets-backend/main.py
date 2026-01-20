@@ -2060,3 +2060,6 @@ async def stop_qr_session(payload: dict, email: str = Depends(verify_token)):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# Vercel serverless handler
+app_handler = app
