@@ -260,52 +260,70 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
     setShowMultiSessionModal(true);
   };
 
+  // When saving multi-session attendance
   const handleSaveMultiSession = async (sessions: Array<{ id: string; name: string; status: "P" | "A" | "L" | null }>) => {
-    if (selectedStudent === null || !multiSessionDate) return;
+    if (selectedStudent === null || !multiSessionDate) {
+      return;
+    }
 
     try {
-      const token = localStorage.getItem('access_token');
-      if (!token) return;
+      const token = localStorage.getItem("access_token");
+      if (!token) {
+        return;
+      }
 
-      const validSessions = sessions.filter(s => s.status !== null);
+      // Find the actual student object to get their ID
+      const student = activeClass.students.find(s => s.id === selectedStudent);
+      if (!student) {
+        console.error("Student not found");
+        return;
+      }
 
-      // Create updated class object
-      const updatedClass: Class = {
-        ...activeClass,
-        students: activeClass.students.map(student => {
-          if (student.id === selectedStudent) {
-            return {
-              ...student,
-              attendance: {
-                ...student.attendance,
-                [multiSessionDate]: {
-                  sessions: validSessions.map(s => ({
-                    id: s.id,
-                    name: s.name,
-                    status: s.status as "P" | "A" | "L",
-                  })),
-                  updated_at: new Date().toISOString()
-                }
-              }
-            };
-          }
-          return student;
-        })
-      };
+      const validSessions = sessions.filter((s) => s.status !== null);
 
-      // Update parent state immediately
-      onUpdateClassData(updatedClass);
+      // ✅ Call the multi-session endpoint
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/classes/${activeClass.id}/multi-session-attendance`,
+        {
+          method: "PUT",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            student_id: student.id,
+            date: multiSessionDate,
+            sessions: validSessions.map(s => ({
+              id: s.id,
+              name: s.name,
+              status: s.status as "P" | "A" | "L"
+            })),
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Failed to save multi-session attendance");
+      }
+
+      const data = await response.json();
+
+      // Update parent state with returned class data
+      if (data.class) {
+        onUpdateClassData(data.class);
+      }
+
+      console.log("✅ Multi-session attendance saved successfully!");
 
       // Close modal
       setShowMultiSessionModal(false);
       setSelectedDay(null);
       setSelectedStudent(null);
-
     } catch (error) {
-      console.error('Failed to update:', error);
+      console.error("❌ Save error:", error);
+      alert("Failed to save multi-session attendance. Please try again.");
     }
   };
-
 
   const handleCloseMultiSession = () => {
     setShowMultiSessionModal(false);
