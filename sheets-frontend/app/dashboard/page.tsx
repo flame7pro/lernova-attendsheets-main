@@ -235,45 +235,51 @@ export default function DashboardPage() {
   const saveClassToBackend = async (updatedClass: Class) => {
     if (!user) return;
 
-    // Save to localStorage immediately for offline support
-    const updatedClasses = classes.map(c => c.id === updatedClass.id ? updatedClass : c);
-    if (user) {
-      localStorage.setItem(`classes_${user.id}`, JSON.stringify(updatedClasses));
-    }
-
     // Sync to backend
     try {
-      console.log('💾 Saving class to Neon:', updatedClass.id);
-      await classService.updateClass(String(updatedClass.id), updatedClass);
-      console.log('✅ Saved to Neon successfully');
-      setSyncError(''); // Clear any previous errors
+      console.log("💾 Saving class to Neon:", updatedClass.id);
+      const result = await classService.updateClass(String(updatedClass.id), updatedClass);
+      console.log("✅ Saved to Neon successfully");
+
+      // ✅ UPDATE STATE with backend response
+      setClasses(prevClasses =>
+        prevClasses.map(cls => cls.id === result.class.id ? result.class : cls)
+      );
+
+      setSyncError(""); // Clear any previous errors
     } catch (error) {
-      console.error('❌ Error saving class to backend:', error);
-      setSyncError('Failed to sync some changes');
-      // Don't block UI - data is saved locally
+      console.error("❌ Error saving class to backend:", error);
+      setSyncError("Failed to sync some changes");
     }
   };
+
 
   // Create debounced version (saves 1 second after last change)
   const [debouncedSave] = useDebounce(saveClassToBackend, 1000);
 
   // Immediate save (for critical operations like delete)
   const saveClass = async (updatedClass: Class) => {
-    const updatedClasses = classes.map(c => c.id === updatedClass.id ? updatedClass : c);
-    setClasses(updatedClasses);
-
     // Save to localStorage immediately
     if (user) {
+      const updatedClasses = classes.map(c =>
+        c.id === updatedClass.id ? updatedClass : c
+      );
       localStorage.setItem(`classes_${user.id}`, JSON.stringify(updatedClasses));
     }
 
     // Sync to backend asynchronously
     try {
-      await classService.updateClass(String(updatedClass.id), updatedClass);
-      setSyncError('');
+      const result = await classService.updateClass(String(updatedClass.id), updatedClass);
+
+      // ✅ UPDATE STATE with backend response
+      setClasses(prevClasses =>
+        prevClasses.map(cls => cls.id === result.class.id ? result.class : cls)
+      );
+
+      setSyncError("");
     } catch (error) {
-      console.error('Error saving class to backend:', error);
-      setSyncError('Failed to sync some changes');
+      console.error("Error saving class to backend:", error);
+      setSyncError("Failed to sync some changes");
     }
   };
 
@@ -312,30 +318,37 @@ export default function DashboardPage() {
   };
 
   const handleAddClass = async (newClass: Class) => {
-    console.log('ðŸ†• Creating new class:', newClass);
+    console.log("Creating new class", newClass);
 
-    const updatedClasses = [...classes, newClass];
-    setClasses(updatedClasses);
-    setActiveClassId(newClass.id);
-    setShowSnapshot(false);
-    setShowImportState(false);
-
-    // Save to localStorage immediately
-    if (user) {
-      localStorage.setItem(`classes_${user.id}`, JSON.stringify(updatedClasses));
-      console.log('ðŸ’¾ Saved to localStorage');
-    }
-
-    // CREATE new class on backend
+    // CREATE new class on backend FIRST
     try {
       const result = await classService.createClass(newClass);
-      console.log('âœ… Backend response:', result);
-      setSyncError('');
+      console.log("Backend response:", result);
+
+      // ✅ Use the class returned from backend (has correct ID, etc.)
+      const backendClass = result.class;
+
+      // ✅ Update state with backend class
+      const updatedClasses = [...classes, backendClass];
+      setClasses(updatedClasses);
+      setActiveClassId(backendClass.id);
+      setShowSnapshot(false);
+      setShowImportState(false);
+
+      // Save to localStorage
+      if (user) {
+        localStorage.setItem(`classes_${user.id}`, JSON.stringify(updatedClasses));
+      }
+
+      setSyncError("");
     } catch (error) {
-      console.error('âŒ Backend error:', error);
-      setSyncError('Failed to sync new class');
+      console.error("Backend error:", error);
+      setSyncError("Failed to create class");
+
+      // ❌ Don't add to UI if backend failed
     }
   };
+
 
   const handleDeleteClass = (classId: number, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -387,7 +400,8 @@ export default function DashboardPage() {
     setShowSnapshot(false);
   };
 
-  const handleUpdateClassName = (classId: number, newName: string) => {
+  const handleUpdateClassName = async (classId: number, newName: string) => {
+    // Optimistic UI update
     const updatedClasses = classes.map(cls =>
       cls.id === classId ? { ...cls, name: newName } : cls
     );
@@ -395,9 +409,10 @@ export default function DashboardPage() {
 
     const updatedClass = updatedClasses.find(c => c.id === classId);
     if (updatedClass) {
-      saveClass(updatedClass);
+      await saveClass(updatedClass); // ✅ Now uses backend response
     }
   };
+
 
   const handleAddStudent = () => {
     if (!activeClassId) return;

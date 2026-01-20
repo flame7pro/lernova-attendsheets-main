@@ -39,6 +39,7 @@ export interface ClassStatistics {
 }
 
 export interface Class {
+  class: any;
   id: number;
   name: string;
   students: Student[];
