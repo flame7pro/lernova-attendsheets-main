@@ -1510,7 +1510,7 @@ class DatabaseManager:
             db.close()
 
     def get_verification_code(self, email: str, purpose: str) -> Optional[Dict[str, Any]]:
-        db = self.get_db()
+        db = self._get_db()
         try:
             code = db.query(VerificationCode).filter(
                 and_(
