@@ -355,7 +355,7 @@ class DatabaseManager:
         Delete user (teacher) and all associated data
         Deletes: classes, class_students, QR sessions, verification codes
         """
-        db = self.get_db()
+        db = self._get_db()
         try:
             user = db.query(User).filter(User.id == user_id).first()
             if not user:
@@ -532,7 +532,7 @@ class DatabaseManager:
 
     def update_class(self, user_id: str, class_id: int, class_data: Dict[str, Any]) -> Dict[str, Any]:
         """Update an existing class"""
-        db = self.get_db()
+        db = self._get_db()
         try:
             cls = db.query(Class).filter(
                 Class.id == class_id,
@@ -827,7 +827,7 @@ class DatabaseManager:
         Delete a student account from User table (where role='student')
         Also deletes all their enrollments and class_student records
         """
-        db = self.get_db()
+        db = self._get_db()
         try:
             # Find student in User table
             student = db.query(User).filter(
@@ -1062,7 +1062,7 @@ class DatabaseManager:
         """
         Calculate student attendance statistics for a specific class.
         """
-        db = self.get_db()
+        db = self._get_db()
         try:
             # Get student's attendance record
             class_student = db.query(ClassStudent).filter(
@@ -1549,7 +1549,7 @@ class DatabaseManager:
         """
         Calculate comprehensive class statistics.
         """
-        db = self.get_db()
+        db = self._get_db()
         try:
             # Get class with students
             cls = db.query(Class).filter(

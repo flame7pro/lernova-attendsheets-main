@@ -847,47 +847,6 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
     )
     : activeClass.students;
 
-
-  // Fetch sessions for the current month
-  React.useEffect(() => {
-    const fetchMonthSessions = async () => {
-      const token = localStorage.getItem('access_token');
-      if (!token) return;
-
-      const sessionsMap: Record<string, any[]> = {};
-
-      // Fetch sessions for each day of the month
-      for (let day = 1; day <= daysInMonth; day++) {
-        const dateKey = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-
-        try {
-          const response = await fetch(
-            `${process.env.NEXT_PUBLIC_API_URL}/sessions/${activeClass.id}?date=${dateKey}`,
-            { headers: { Authorization: `Bearer ${token}` } }
-          );
-
-          if (response.ok) {
-            const data = await response.json();
-            if (data.sessions && data.sessions.length > 0) {
-              sessionsMap[dateKey] = data.sessions;
-            }
-          }
-        } catch (err) {
-          console.error(`Failed to fetch sessions for ${dateKey}:`, err);
-        }
-      }
-
-      setSessionData(sessionsMap);
-    };
-
-    fetchMonthSessions();
-
-    // Auto-refresh every 5 seconds
-    const interval = setInterval(fetchMonthSessions, 5000);
-    return () => clearInterval(interval);
-  }, [activeClass.id, currentMonth, currentYear, daysInMonth]);
-
-
   return (
     <>
       {/* 🆕 SAVE STATUS INDICATOR */}
