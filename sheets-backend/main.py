@@ -682,9 +682,10 @@ async def verify_email(request: VerifyEmailRequest):
             email=request.email,
             password_hash=stored_data["password_hash"],
             name=stored_data["name"],
-            role=role
+            role=role,
+            email_verified=True  # ✅ ADD THIS LINE
         )
-        
+
         db.delete_verification_code(request.email, "email_verification")
         
         access_token = create_access_token(
@@ -716,7 +717,7 @@ async def login(request: LoginRequest):
             detail="Invalid email or password"
         )
     
-    if not verify_password(request.password, user["password"]):
+    if not verify_password(request.password, user["password_hash"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password"
@@ -1051,6 +1052,7 @@ async def verify_student_email(request: VerifyEmailRequest):
             password_hash=stored_data["password_hash"],
             name=stored_data["name"],
             role="student",
+            email_verified=True,  # ✅ ADD THIS LINE
             device_id=stored_data.get("device_id"),
             device_info=stored_data.get("device_info")
         )
@@ -1090,8 +1092,8 @@ async def student_login(request: LoginRequest):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password"
         )
-    
-    if not verify_password(request.password, user["password"]):
+
+    if not verify_password(request.password, user["password_hash"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password"
@@ -1411,77 +1413,6 @@ async def verify_class_exists(class_id: str):
     except Exception as e:
         print(f"Error verifying class: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to verify class")
-
-
-@app.post("/auth/verify-email", response_model=TokenResponse)
-async def verify_email(request: VerifyEmailRequest):
-    """Verify email with code - handles both teacher and student"""
-    try:
-        if request.email not in verification_codes:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No verification code found"
-            )
-        
-        stored_data = verification_codes[request.email]
-        expires_at = datetime.fromisoformat(stored_data["expires_at"])
-        
-        if datetime.utcnow() > expires_at:
-            del verification_codes[request.email]
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Verification code expired"
-            )
-        
-        if stored_data["code"] != request.code:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid verification code"
-            )
-        
-        # Get role from stored data (default to teacher for backward compatibility)
-        role = stored_data.get("role", "teacher")
-        
-        # Create user based on role
-        if role == "student":
-            user_id = int(datetime.utcnow().timestamp() * 1000)
-            user_data = db.create_student(
-                student_id=user_id,
-                email=request.email,
-                name=stored_data["name"],
-                password_hash=stored_data["password"]
-            )
-        else:
-            user_id = int(datetime.utcnow().timestamp() * 1000)
-            user_data = db.create_user(
-                user_id=user_id,
-                email=request.email,
-                name=stored_data["name"],
-                password_hash=stored_data["password"]
-            )
-        
-        # Clean up verification code
-        del verification_codes[request.email]
-        
-        # Create access token with role
-        access_token = create_access_token(
-            data={"sub": request.email, "role": role},
-            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        )
-        
-        return TokenResponse(
-            access_token=access_token,
-            user=UserResponse(id=user_id, email=request.email, name=stored_data["name"])
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Verification error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Verification failed: {str(e)}"
-        )
-
 
 # ==================== CLASS ENDPOINTS ====================
 
