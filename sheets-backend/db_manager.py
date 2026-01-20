@@ -5,7 +5,7 @@ import os
 import json
 import random
 import string
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import Dict, List, Any, Optional
 
 from sqlalchemy.orm import Session
@@ -181,7 +181,7 @@ class DatabaseManager:
             device_exists = False
             for device in trusted_devices:
                 if device.get('id') == device_id:
-                    device['last_seen'] = datetime.utcnow().isoformat()
+                    device['last_seen'] = datetime.now(timezone.utc).isoformat()
                     device['login_count'] = device.get('login_count', 0) + 1
                     device_exists = True
                     break
@@ -193,8 +193,8 @@ class DatabaseManager:
                     'browser': device_info.get('browser', 'Unknown'),
                     'os': device_info.get('os', 'Unknown'),
                     'device': device_info.get('device', 'Unknown'),
-                    'first_seen': datetime.utcnow().isoformat(),
-                    'last_seen': datetime.utcnow().isoformat(),
+                    'first_seen': datetime.now(timezone.utc).isoformat(),
+                    'last_seen': datetime.now(timezone.utc).isoformat(),
                     'login_count': 1
                 }
                 trusted_devices.append(new_device)
@@ -1272,10 +1272,10 @@ class DatabaseManager:
             if not session:
                 return None
 
-            elapsed = (datetime.utcnow() - session.code_generated_at).total_seconds()
+            elapsed = (datetime.now(timezone.utc) - session.code_generated_at).total_seconds()
             if elapsed >= session.rotation_interval:
                 session.current_code = self._generate_qr_code()
-                session.code_generated_at = datetime.utcnow()
+                session.code_generated_at = datetime.now(timezone.utc)
                 db.commit()
 
             return {
@@ -1519,7 +1519,7 @@ class DatabaseManager:
                 and_(
                     VerificationCode.email == email,
                     VerificationCode.purpose == purpose,
-                    VerificationCode.expires_at > datetime.utcnow(),
+                    VerificationCode.expires_at > datetime.now(timezone.utc),
                 )
             ).first()
             
