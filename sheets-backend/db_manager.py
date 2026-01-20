@@ -1,5 +1,6 @@
 # db_manager.py - PostgreSQL Version
 
+import email
 import os
 import json
 import random
@@ -95,15 +96,16 @@ class DatabaseManager:
             db.close()
 
     def create_user(
-        self,
-        user_id: str,
-        email: str,
-        password_hash: str,
-        name: str,
-        role: str = "teacher",
-        device_id: Optional[str] = None,
-        device_info: Optional[Dict] = None,
-    ) -> Dict[str, Any]:
+    self, 
+    user_id: str, 
+    email: str, 
+    password_hash: str, 
+    name: str, 
+    role: str = "teacher",
+    device_id: Optional[str] = None,
+    device_info: Optional[Dict] = None,
+    emailverified: bool = False  
+) -> Dict[str, Any]:
         """Create a new user"""
         db = self._get_db()
         try:
@@ -115,18 +117,18 @@ class DatabaseManager:
                 role=role,
                 device_id=device_id,
                 device_info=device_info,
-                email_verified=False,
+                emailverified=emailverified,  # ✅ Column name in DB
             )
             db.add(user)
             db.commit()
             db.refresh(user)
-
+            
             return {
                 "id": user.id,
                 "email": user.email,
                 "name": user.name,
                 "role": user.role,
-                "email_verified": user.email_verified,
+                "emailverified": user.emailverified,
             }
         except Exception as e:
             db.rollback()

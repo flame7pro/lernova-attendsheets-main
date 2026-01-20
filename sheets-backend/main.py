@@ -1032,48 +1032,40 @@ async def student_signup(request: SignupRequest):
         raise HTTPException(status_code=500, detail=f"Signup failed: {str(e)}")
 
 @app.post("/auth/student/verify-email", response_model=TokenResponse)
-async def verify_student_email(request: VerifyEmailRequest):
+async def student_verify_email(request: VerifyEmailRequest):
     try:
-        stored_data = db.get_verification_code(request.email, "email_verification")
-        
+        stored_data = db.get_verification_code(request.email, "emailverification")
         if not stored_data:
             raise HTTPException(status_code=400, detail="No verification code found or code expired")
-        
-        if stored_data.get("role") != "student":
-            raise HTTPException(status_code=400, detail="Invalid verification attempt")
         
         if stored_data["code"] != request.code:
             raise HTTPException(status_code=400, detail="Invalid verification code")
         
-        student_id = int(datetime.utcnow().timestamp() * 1000)
+        # ✅ FIXED - Use correct parameter names (no underscores)
+        user_id = int(datetime.utcnow().timestamp() * 1000)
+        
         db.create_user(
-            user_id=student_id,
+            user_id=user_id,
             email=request.email,
-            password_hash=stored_data["password_hash"],
+            password_hash=stored_data["passwordhash"],
             name=stored_data["name"],
             role="student",
-            email_verified=True,  # ✅ ADD THIS LINE
-            device_id=stored_data.get("device_id"),
-            device_info=stored_data.get("device_info")
+            device_id=stored_data.get("deviceid"),
+            device_info=stored_data.get("deviceinfo"),
+            emailverified=True  # ✅ CHANGED FROM email_verified
         )
         
-        if stored_data.get("device_id") and stored_data.get("device_info"):
-            db.add_trusted_device(student_id, stored_data["device_info"])
-            print(f"✅ First device auto-trusted for student: {request.email}")
-            print(f"   Device: {stored_data['device_info'].get('name')}")
-        
-        db.delete_verification_code(request.email, "email_verification")
+        db.delete_verification_code(request.email, "emailverification")
         
         access_token = create_access_token(
-            data={"sub": request.email, "role": "student"},
+            data={"sub": request.email},
             expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         )
         
         return TokenResponse(
             access_token=access_token,
-            user=UserResponse(id=student_id, email=request.email, name=stored_data["name"])
+            user=UserResponse(id=user_id, email=request.email, name=stored_data["name"])
         )
-    
     except HTTPException:
         raise
     except Exception as e:
