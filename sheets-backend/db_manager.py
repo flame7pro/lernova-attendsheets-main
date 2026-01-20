@@ -26,8 +26,7 @@ def parse_attendance_value(attendance_value: Any) -> dict:
     """
     Parse attendance value and return counts.
     Handles all formats: string, old object, and new sessions format.
-    
-    Returns: {"present": int, "absent": int, "late": int, "total": int}
+    Returns: {'present': int, 'absent': int, 'late': int, 'total': int}
     """
     present = 0
     absent = 0
@@ -43,7 +42,7 @@ def parse_attendance_value(attendance_value: Any) -> dict:
         for session in sessions:
             status = session.get("status")
             if status:
-                total += 1
+                total += 1  # ✅ Count EACH session
                 if status == "P":
                     present += 1
                 elif status == "A":
@@ -63,7 +62,7 @@ def parse_attendance_value(attendance_value: Any) -> dict:
         elif status == "L":
             late = count
     
-    # VERY OLD FORMAT: "P" | "A" | "L"
+    # VERY OLD FORMAT: "P" / "A" / "L"
     elif isinstance(attendance_value, str):
         total = 1
         if attendance_value == "P":
@@ -73,12 +72,7 @@ def parse_attendance_value(attendance_value: Any) -> dict:
         elif attendance_value == "L":
             late = 1
     
-    return {
-        "present": present,
-        "absent": absent,
-        "late": late,
-        "total": total
-    }
+    return {"present": present, "absent": absent, "late": late, "total": total}
 
 class DatabaseManager:
     def __init__(self, base_dir: str = "data"):
