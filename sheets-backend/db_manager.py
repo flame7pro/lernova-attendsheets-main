@@ -1509,20 +1509,17 @@ class DatabaseManager:
         finally:
             db.close()
 
-    def get_verification_code(
-        self, email: str, purpose: str
-    ) -> Optional[Dict[str, Any]]:
-        """Get verification code with extra_data"""
-        db = self._get_db()
+    def get_verification_code(self, email: str, purpose: str) -> Optional[Dict[str, Any]]:
+        db = self.get_db()
         try:
             code = db.query(VerificationCode).filter(
                 and_(
                     VerificationCode.email == email,
                     VerificationCode.purpose == purpose,
-                    VerificationCode.expires_at > datetime.now(timezone.utc),
+                    VerificationCode.expires_at > datetime.now(timezone.utc),  # ✅ CORRECT!
                 )
             ).first()
-            
+                
             if not code:
                 return None
             
