@@ -11,3 +11,4 @@ alembic
 python-multipart
 mangum
 user-agents
+sib-api-v3-sdk
