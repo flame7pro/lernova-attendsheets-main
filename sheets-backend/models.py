@@ -7,95 +7,95 @@ class User(Base):
     __tablename__ = "users"
     
     id = Column(BigInteger, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
+    email = Column(String, unique=True, nullable=False)
+    name = Column(String, nullable=False)
     password_hash = Column(String, nullable=False)
-    full_name = Column(String, nullable=False)
-    is_verified = Column(Boolean, default=False)
+    role = Column(String, nullable=False)
+    email_verified = Column(Boolean, default=False)
+    device_id = Column(String, nullable=True)
+    device_info = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    
-    classes = relationship("Class", back_populates="teacher", cascade="all, delete-orphan")
-    qr_sessions = relationship("QRSession", back_populates="teacher", cascade="all, delete-orphan")
-
-class StudentUser(Base):
-    __tablename__ = "student_users"
-    
-    id = Column(BigInteger, primary_key=True, index=True)
-    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False)
-    email = Column(String, unique=True, index=True, nullable=False)
-    password_hash = Column(String, nullable=False)
-    full_name = Column(String, nullable=False)
-    is_verified = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    enrollments = relationship("Enrollment", back_populates="student", cascade="all, delete-orphan")
 
 class Class(Base):
     __tablename__ = "classes"
     
     id = Column(BigInteger, primary_key=True, index=True)
-    teacher_id = Column(BigInteger, ForeignKey('users.id'), nullable=False)
+    teacher_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
     name = Column(String, nullable=False)
-    description = Column(Text)
+    class_id = Column(String, unique=True, nullable=True)
+    enrollment_mode = Column(String, default="manual_entry")
+    custom_columns = Column(JSON, default=list)
+    thresholds = Column(JSON, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
-    
-    teacher = relationship("User", back_populates="classes")
-    enrollments = relationship("Enrollment", back_populates="class_obj", cascade="all, delete-orphan")
-    qr_sessions = relationship("QRSession", back_populates="class_obj", cascade="all, delete-orphan")
-    class_students = relationship("ClassStudent", back_populates="class_obj", cascade="all, delete-orphan")
 
 class ClassStudent(Base):
     """Students in a class (for manual_entry and import_data modes)"""
     __tablename__ = "class_students"
     
     id = Column(BigInteger, primary_key=True, index=True)
-    class_id = Column(BigInteger, ForeignKey("classes.id", ondelete="CASCADE"), nullable=False)
+    class_id = Column(BigInteger, ForeignKey("classes.id", ondelete="CASCADE"))
     student_id = Column(BigInteger, nullable=False)
     name = Column(String, nullable=False)
     roll_no = Column(String, default="")
     attendance = Column(JSON, default=dict)
     custom_data = Column(JSON, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class StudentUser(Base):
+    """Student accounts (for enrollment_via_id mode)"""
+    __tablename__ = "student_users"
     
-    class_obj = relationship("Class", back_populates="class_students")
+    id = Column(BigInteger, primary_key=True, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
+    name = Column(String, nullable=False)
+    email = Column(String, nullable=False)
+    device_id = Column(String)
+    device_info = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 class Enrollment(Base):
+    """Student enrollments in classes"""
     __tablename__ = "enrollments"
     
     id = Column(BigInteger, primary_key=True, index=True)
-    student_user_id = Column(BigInteger, ForeignKey('student_users.id'), nullable=False)
-    class_id = Column(BigInteger, ForeignKey('classes.id'), nullable=False)
+    student_user_id = Column(BigInteger, ForeignKey("student_users.id", ondelete="CASCADE"))
+    class_id = Column(BigInteger, ForeignKey("classes.id", ondelete="CASCADE"))
+    name = Column(String, nullable=False)
+    roll_no = Column(String, default="")
     enrolled_at = Column(DateTime, default=datetime.utcnow)
-    
-    student = relationship("StudentUser", back_populates="enrollments")
-    class_obj = relationship("Class", back_populates="enrollments")
 
 class QRSession(Base):
+    """Active QR attendance sessions"""
     __tablename__ = "qr_sessions"
     
     id = Column(BigInteger, primary_key=True, index=True)
-    teacher_id = Column(BigInteger, ForeignKey('users.id'), nullable=False)
-    class_id = Column(BigInteger, ForeignKey('classes.id'), nullable=False)
-    qr_code = Column(String, unique=True, nullable=False)
-    expires_at = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    teacher = relationship("User", back_populates="qr_sessions")
-    class_obj = relationship("Class", back_populates="qr_sessions")
+    class_id = Column(BigInteger, ForeignKey("classes.id", ondelete="CASCADE"))
+    teacher_id = Column(BigInteger, ForeignKey("users.id"))
+    date = Column(String, nullable=False)
+    session_number = Column(Integer, nullable=False)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    rotation_interval = Column(Integer, default=5)
+    current_code = Column(String, nullable=False)
+    code_generated_at = Column(DateTime, default=datetime.utcnow)
+    scanned_students = Column(JSON, default=list)
+    status = Column(String, default="active")
 
 class VerificationCode(Base):
-    __tablename__ = "verification_codes"
+    __tablename__ = 'verification_codes'
     
     id = Column(BigInteger, primary_key=True, index=True)
-    email = Column(String, index=True, nullable=False)
+    email = Column(String, nullable=False)
     code = Column(String, nullable=False)
+    purpose = Column(String, nullable=False)
     expires_at = Column(DateTime, nullable=False)
+    extra_data = Column(JSON, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class AttendanceSession(Base):
     __tablename__ = "attendance_sessions"
     
     id = Column(BigInteger, primary_key=True, index=True)
-    class_id = Column(BigInteger, ForeignKey('classes.id'), nullable=False)
+    class_id = Column(BigInteger, ForeignKey("classes.id"), nullable=False)
     date = Column(Date, nullable=False)
     title = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
