@@ -653,19 +653,45 @@ class DatabaseManager:
 
 
     def delete_class(self, user_id: str, class_id: int) -> bool:
-        """Delete a class (with ownership check)"""
-        db = self._get_db()
+        """Delete a class with ownership check"""
+        db = self.get_db()
         try:
             cls = db.query(Class).filter(
                 Class.id == class_id,
                 Class.teacher_id == user_id  # Security
             ).first()
+            
             if not cls:
                 return False
+            
+            print(f"[DB] Deleting class {class_id}: {cls.name}")
+            
+            # ✅ Delete all class_students records for this class
+            deleted_students = db.query(ClassStudent).filter(
+                ClassStudent.class_id == class_id
+            ).delete(synchronize_session=False)
+            print(f"[DB] Deleted {deleted_students} class student records")
+            
+            # ✅ Delete all QR sessions for this class
+            deleted_qr = db.query(QRSession).filter(
+                QRSession.class_id == class_id
+            ).delete(synchronize_session=False)
+            print(f"[DB] Deleted {deleted_qr} QR sessions")
+            
+            # ✅ Delete all attendance sessions for this class
+            deleted_sessions = db.query(AttendanceSession).filter(
+                AttendanceSession.class_id == str(class_id)
+            ).delete(synchronize_session=False)
+            print(f"[DB] Deleted {deleted_sessions} attendance sessions")
+            
+            # ✅ Finally, delete the class itself
             db.delete(cls)
             db.commit()
+            
+            print(f"[DB] Class {class_id} deleted successfully")
             return True
-        except Exception:
+        except Exception as e:
+            print(f"[DB] Delete class error: {e}")
             db.rollback()
             return False
         finally:
