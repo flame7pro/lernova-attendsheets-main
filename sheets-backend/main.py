@@ -1380,10 +1380,7 @@ async def verify_class_exists(class_id: str):
     try:
         class_data = db.get_class_by_id(class_id)
         if not class_data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Class not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
         
         # Get teacher info
         teacher_id = class_data.get("teacher_id")
@@ -1399,19 +1396,12 @@ async def verify_class_exists(class_id: str):
             "teacher_name": teacher_name,
             "class_id": class_id
         }
-        
     except HTTPException:
         raise
     except Exception as e:
         print(f"Error verifying class: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to verify class"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to verify class")
 
-
-# 5. UPDATE your existing verify-email endpoint to handle both roles
-# REPLACE your existing @app.post("/auth/verify-email") with this:
 
 @app.post("/auth/verify-email", response_model=TokenResponse)
 async def verify_email(request: VerifyEmailRequest):

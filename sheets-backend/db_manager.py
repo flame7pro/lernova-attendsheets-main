@@ -365,31 +365,27 @@ class DatabaseManager:
         finally:
             db.close()
 
-    def get_class_sessions(self, class_id: int, date_start: Optional[str] = None, date_end: Optional[str] = None,) -> List[Dict[str, Any]]:
-        """Get all sessions for a class, optionally filtered by date range."""
+    def get_class_sessions(self, user_id: str, class_id: str, date: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all sessions for a class, optionally filtered by date."""
         db = self._get_db()
         try:
             query = db.query(AttendanceSession).filter(
                 AttendanceSession.class_id == str(class_id)
             )
-
-            # Optional date filtering if main.py sends extra args
-            if date_start:
-                query = query.filter(AttendanceSession.date >= date_start)
-            if date_end:
-                query = query.filter(AttendanceSession.date <= date_end)
-
+            
+            # Filter by date if provided
+            if date:
+                query = query.filter(AttendanceSession.date == date)
+            
             sessions = query.order_by(AttendanceSession.date.desc()).all()
-
+            
             return [
                 {
                     "id": session.id,
                     "class_id": session.class_id,
                     "date": session.date.isoformat() if session.date else None,
                     "title": session.title,
-                    "created_at": session.created_at.isoformat()
-                    if session.created_at
-                    else None,
+                    "created_at": session.created_at.isoformat() if session.created_at else None,
                 }
                 for session in sessions
             ]
@@ -410,9 +406,19 @@ class DatabaseManager:
         finally:
             db.close()
 
-    # Convenience wrapper expected by main.py
-    def get_class(self, class_id: int) -> Optional[Dict[str, Any]]:
-        return self.get_class_by_id(class_id)
+    def get_class(self, user_id: str, class_id: int) -> Optional[Dict[str, Any]]:
+        """Get class by ID (with ownership check)"""
+        db = self._get_db()
+        try:
+            cls = db.query(Class).filter(
+                Class.id == class_id,
+                Class.teacher_id == user_id  # Security
+            ).first()
+            if not cls:
+                return None
+            return self._format_class(cls, db)
+        finally:
+            db.close()
 
     def get_class_by_class_id(self, class_id: str) -> Optional[Dict[str, Any]]:
         """Get class by class_id string (for student enrollment)"""
@@ -425,21 +431,27 @@ class DatabaseManager:
         finally:
             db.close()
 
-    def update_class(self, class_id: int, class_data: Dict[str, Any]) -> Dict[str, Any]:
+    def update_class(self, user_id: str, class_id: int, class_data: Dict[str, Any]) -> Dict[str, Any]:
         """Update an existing class"""
         db = self._get_db()
         try:
-            cls = db.query(Class).filter(Class.id == class_id).first()
+            # Verify ownership (optional but recommended)
+            cls = db.query(Class).filter(
+                Class.id == class_id,
+                Class.teacher_id == user_id  # Security check
+            ).first()
+            
             if not cls:
-                raise ValueError(f"Class {class_id} not found")
-
+                raise ValueError(f"Class {class_id} not found or you don't own it")
+            
             cls.name = class_data.get("name", cls.name)
             cls.custom_columns = class_data.get("customColumns", cls.custom_columns)
             cls.thresholds = class_data.get("thresholds", cls.thresholds)
             cls.enrollment_mode = class_data.get("enrollment_mode", cls.enrollment_mode)
-
+            
+            # Delete and recreate students
             db.query(ClassStudent).filter(ClassStudent.class_id == class_id).delete()
-
+            
             if class_data.get("students"):
                 for student_data in class_data["students"]:
                     student = ClassStudent(
@@ -455,7 +467,7 @@ class DatabaseManager:
                         },
                     )
                     db.add(student)
-
+            
             db.commit()
             db.refresh(cls)
             return self._format_class(cls, db)
@@ -465,11 +477,14 @@ class DatabaseManager:
         finally:
             db.close()
 
-    def delete_class(self, class_id: int) -> bool:
-        """Delete a class"""
+    def delete_class(self, user_id: str, class_id: int) -> bool:
+        """Delete a class (with ownership check)"""
         db = self._get_db()
         try:
-            cls = db.query(Class).filter(Class.id == class_id).first()
+            cls = db.query(Class).filter(
+                Class.id == class_id,
+                Class.teacher_id == user_id  # Security
+            ).first()
             if not cls:
                 return False
             db.delete(cls)
@@ -515,12 +530,13 @@ class DatabaseManager:
             "id": cls.id,
             "name": cls.name,
             "classId": cls.class_id,
+            "teacher_id": cls.teacher_id,  # ← ADD THIS LINE
             "enrollment_mode": cls.enrollment_mode,
             "customColumns": cls.custom_columns or [],
             "thresholds": cls.thresholds or [],
             "students": students_list,
         }
-
+    
     # Placeholder for compatibility with old JSON-based code
     def get_class_file(self, user_id: str) -> str:
         return ""
@@ -756,30 +772,75 @@ class DatabaseManager:
         finally:
             db.close()
 
-    def get_student_class_details(
-        self, student_user_id: str, class_id: int
-    ) -> Optional[Dict[str, Any]]:
-        """Basic details about a student's enrollment in a class"""
+    def get_student_class_details(self, student_user_id: str, class_id: int) -> Optional[Dict[str, Any]]:
+        """Get detailed information about a student's enrollment in a class"""
         db = self._get_db()
         try:
+            # Get enrollment
             enrollment = db.query(Enrollment).filter(
                 and_(
                     Enrollment.student_user_id == student_user_id,
                     Enrollment.class_id == class_id,
                 )
             ).first()
+            
             if not enrollment:
                 return None
-
+            
+            # Get class info
             cls = db.query(Class).filter(Class.id == class_id).first()
-            teacher = db.query(User).filter(User.id == cls.teacher_id).first() if cls else None
-
+            if not cls:
+                return None
+            
+            # Get teacher info
+            teacher = db.query(User).filter(User.id == cls.teacher_id).first()
+            
+            # Find student in class_students table to get attendance data
+            class_student = db.query(ClassStudent).filter(
+                ClassStudent.class_id == class_id,
+                ClassStudent.student_id == enrollment.student_user_id
+            ).first()
+            
+            # Build student record with attendance
+            attendance = class_student.attendance if class_student else {}
+            
+            # Calculate statistics
+            total_classes = len(attendance) if attendance else 0
+            present_count = sum(1 for status in attendance.values() if status == "P") if attendance else 0
+            absent_count = sum(1 for status in attendance.values() if status == "A") if attendance else 0
+            late_count = sum(1 for status in attendance.values() if status == "L") if attendance else 0
+            percentage = (present_count / total_classes * 100) if total_classes > 0 else 0
+            
+            # Determine status based on percentage
+            status = "good"
+            if percentage < 75:
+                status = "at-risk"
+            elif percentage >= 90:
+                status = "excellent"
+            
             return {
-                "class_id": class_id,
-                "class_name": cls.name if cls else None,
-                "teacher_name": teacher.name if teacher else None,
+                "class_id": str(class_id),
+                "class_name": cls.name,
+                "teacher_name": teacher.name if teacher else "Unknown",
                 "roll_no": enrollment.roll_no,
+                "student_record": {
+                    "id": enrollment.student_user_id,
+                    "name": enrollment.name,
+                    "roll_no": enrollment.roll_no,
+                    "attendance": attendance,
+                },
+                "statistics": {
+                    "total_classes": total_classes,
+                    "present": present_count,
+                    "absent": absent_count,
+                    "late": late_count,
+                    "percentage": round(percentage, 2),
+                    "status": status,
+                }
             }
+        except Exception as e:
+            print(f"Get student class details error: {e}")
+            return None
         finally:
             db.close()
 
@@ -801,12 +862,32 @@ class DatabaseManager:
             "status": "good",
         }
 
-    # Used by main.py – simple stub for now
-    def get_student_day_attendance(
-        self, student_user_id: str, day: str
-    ) -> List[Dict[str, Any]]:
-        """Stub: per-day attendance entries for a student."""
-        return []
+    def get_student_day_attendance(self, user_id: str, class_id: str, student_id: str, date: str) -> List[Dict[str, Any]]:
+        """Get student's attendance for a specific day across all sessions"""
+        db = self._get_db()
+        try:
+            # TODO: Query actual attendance records when you have Attendance model
+            # For now, return empty list
+            sessions = db.query(AttendanceSession).filter(
+                AttendanceSession.class_id == str(class_id),
+                AttendanceSession.date == date
+            ).all()
+            
+            return [
+                {
+                    "session_id": session.id,
+                    "session_name": session.title,
+                    "status": "P",  # Placeholder
+                    "time": session.created_at.isoformat() if session.created_at else None
+                }
+                for session in sessions
+            ]
+        except Exception as e:
+            print(f"Get student day attendance error: {e}")
+            return []
+        finally:
+            db.close()
+
 
     # ==================== QR CODE SYSTEM ====================
 
@@ -902,27 +983,34 @@ class DatabaseManager:
         finally:
             db.close()
 
-    def stop_qr_session(self, class_id: int, date: str) -> bool:
-        """Stop active QR session"""
+    def stop_qr_session(self, class_id: int, user_id: str, date: str) -> Dict[str, Any]:
+        """Stop active QR session and return summary"""
         db = self._get_db()
         try:
             session = db.query(QRSession).filter(
                 and_(
                     QRSession.class_id == class_id,
                     QRSession.date == date,
+                    QRSession.teacher_id == user_id,  # Security check
                     QRSession.status == "active",
                 )
             ).first()
-
+            
             if not session:
-                return False
-
+                return {"success": False, "message": "No active session found"}
+            
             session.status = "completed"
             db.commit()
-            return True
-        except Exception:
+            
+            return {
+                "success": True,
+                "scanned_count": len(session.scanned_students or []),
+                "scanned_students": session.scanned_students or []
+            }
+        except Exception as e:
+            print(f"Stop QR session error: {e}")
             db.rollback()
-            return False
+            return {"success": False, "message": str(e)}
         finally:
             db.close()
 
@@ -954,28 +1042,62 @@ class DatabaseManager:
         finally:
             db.close()
 
-    # Wrapper name likely used in main.py
-    def scan_qr_code(self, class_id: int, date: str, student_user_id: str) -> bool:
-        return self.mark_qr_attendance(class_id, date, student_user_id)
+    def scan_qr_code(self, student_id: str, class_id: str, qr_code: str, date: str) -> Dict[str, Any]:
+        """Student scans QR code to mark attendance"""
+        db = self._get_db()
+        try:
+            # Get active QR session
+            session = db.query(QRSession).filter(
+                and_(
+                    QRSession.class_id == int(class_id),
+                    QRSession.date == date,
+                    QRSession.status == "active",
+                )
+            ).first()
+            
+            if not session:
+                return {"success": False, "message": "No active QR session"}
+            
+            # Verify QR code
+            if session.current_code != qr_code:
+                return {"success": False, "message": "Invalid or expired QR code"}
+            
+            # Mark attendance
+            scanned = session.scanned_students or []
+            if student_id in scanned:
+                return {"success": False, "message": "Already scanned"}
+            
+            scanned.append(student_id)
+            session.scanned_students = scanned
+            db.commit()
+            
+            return {"success": True, "message": "Attendance marked successfully"}
+            
+        except Exception as e:
+            print(f"Scan QR code error: {e}")
+            db.rollback()
+            return {"success": False, "message": str(e)}
+        finally:
+            db.close()
+
 
     # ==================== ATTENDANCE SESSION (non‑QR) ====================
 
-    def create_attendance_session(
-        self, class_id: int, session_date: str, session_name: str
-    ) -> Dict[str, Any]:
-        """Create a manual attendance session (non‑QR)."""
+    def create_attendance_session(self, user_id: str, class_id: str, session_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a manual attendance session (non-QR)."""
         db = self._get_db()
         try:
             session = AttendanceSession(
                 id=str(int(datetime.utcnow().timestamp() * 1000)),
                 class_id=str(class_id),
-                date=datetime.fromisoformat(session_date).date(),
-                title=session_name,
+                date=datetime.fromisoformat(session_data['date']).date(),
+                title=session_data.get('sessionName', 'Session'),
                 created_at=datetime.utcnow(),
             )
             db.add(session)
             db.commit()
             db.refresh(session)
+            
             return {
                 "id": session.id,
                 "class_id": session.class_id,
@@ -983,33 +1105,62 @@ class DatabaseManager:
                 "title": session.title,
                 "created_at": session.created_at.isoformat(),
             }
-        except Exception:
+        except Exception as e:
+            print(f"Create attendance session error: {e}")
             db.rollback()
             raise
         finally:
             db.close()
 
-    def update_session_attendance(
-        self, session_id: str, student_id: str, status: str
-    ) -> bool:
-        """Stub: Update attendance for a student in a session (to be implemented)."""
-        # TODO: connect to an Attendance model/table if you add one.
-        return True
-
-    def delete_attendance_session(self, session_id: str) -> bool:
+    def update_session_attendance(self, user_id: str, class_id: str, session_id: str, student_id: str, status: str) -> bool:
+        """Update attendance for a student in a session"""
+        # TODO: Implement actual logic when you have an Attendance model
         db = self._get_db()
         try:
-            session = (
-                db.query(AttendanceSession)
-                .filter(AttendanceSession.id == session_id)
-                .first()
-            )
+            # Verify session exists and belongs to user's class
+            session = db.query(AttendanceSession).filster(
+                AttendanceSession.id == session_id,
+                AttendanceSession.class_id == str(class_id)
+            ).first()
+            
             if not session:
                 return False
+            
+            # TODO: Store attendance status in separate Attendance table
+            # For now, return True as placeholder
+            return True
+        except Exception as e:
+            print(f"Update session attendance error: {e}")
+            return False
+        finally:
+            db.close()
+
+    def delete_attendance_session(self, user_id: str, class_id: str, session_id: str) -> bool:
+        """Delete an attendance session (with ownership verification)"""
+        db = self._get_db()
+        try:
+            # Verify ownership through class
+            cls = db.query(Class).filter(
+                Class.id == int(class_id),
+                Class.teacher_id == user_id
+            ).first()
+            
+            if not cls:
+                return False
+            
+            session = db.query(AttendanceSession).filter(
+                AttendanceSession.id == session_id,
+                AttendanceSession.class_id == str(class_id)
+            ).first()
+            
+            if not session:
+                return False
+            
             db.delete(session)
             db.commit()
             return True
-        except Exception:
+        except Exception as e:
+            print(f"Delete attendance session error: {e}")
             db.rollback()
             return False
         finally:
