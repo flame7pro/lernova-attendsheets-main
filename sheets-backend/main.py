@@ -584,8 +584,8 @@ def add_trusted_device(user_id: str, device_info: Dict[str, Any]):
             "browser": device_info.get("browser", "Unknown"),
             "os": device_info.get("os", "Unknown"),
             "device": device_info.get("device", "Unknown"),
-            "first_seen": datetime.utcnow().isoformat(),
-            "last_seen": datetime.utcnow().isoformat(),
+            "first_seen": datetime.now(timezone.utc).isoformat(),
+            "last_seen": datetime.now(timezone.utc).isoformat(),
             "login_count": 1
         }
         trusted_devices.append(new_device)
@@ -673,9 +673,9 @@ async def verify_email(request: VerifyEmailRequest):
         role = stored_data.get("role", "teacher")
         
         if role == "student":
-            user_id = int(datetime.utcnow().timestamp() * 1000)
+            user_id = int(datetime.now(timezone.utc).timestamp() * 1000)
         else:
-            user_id = int(datetime.utcnow().timestamp() * 1000)
+            user_id = int(datetime.now(timezone.utc).timestamp() * 1000)
         
         db.create_user(
             user_id=user_id,
@@ -1041,8 +1041,7 @@ async def student_verify_email(request: VerifyEmailRequest):
         if stored_data["code"] != request.code:
             raise HTTPException(status_code=400, detail="Invalid verification code")
         
-        # ✅ FIXED - Use correct parameter names (no underscores)
-        user_id = int(datetime.utcnow().timestamp() * 1000)
+        user_id = int(datetime.now(timezone.utc).timestamp() * 1000)
         
         db.create_user(
             user_id=user_id,
@@ -1527,7 +1526,7 @@ async def update_multi_session_attendance(
                         }
                         for session in request.sessions
                     ],
-                    "updatedAt": datetime.utcnow().isoformat()
+                    "updatedAt": datetime.now(timezone.utc).isoformat()
                 }
                 
                 print(f"✅ Updated student {request.student_id}")
