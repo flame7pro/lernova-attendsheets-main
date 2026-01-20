@@ -269,14 +269,14 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
     try {
       const token = localStorage.getItem("access_token");
       if (!token) {
-        console.error("No auth token");
+        console.error("❌ No auth token");
         return;
       }
 
       // Find the actual student object
       const student = activeClass.students.find(s => s.id === selectedStudent);
       if (!student) {
-        console.error("Student not found");
+        console.error("❌ Student not found");
         return;
       }
 
@@ -289,7 +289,7 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
         sessions: validSessions
       });
 
-      // ✅ Call the multi-session endpoint
+      // ✅ Call the backend API endpoint
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/classes/${activeClass.id}/multi-session-attendance`,
         {
@@ -312,14 +312,14 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
 
       if (!response.ok) {
         const errorData = await response.json();
-        console.error("❌ Save failed:", errorData);
-        throw new Error("Failed to save multi-session attendance");
+        console.error("❌ API Error:", errorData);
+        throw new Error("Failed to save");
       }
 
       const data = await response.json();
-      console.log("✅ Save successful:", data);
+      console.log("✅ Saved successfully:", data);
 
-      // Update parent state with returned class data
+      // Update parent state with the returned class data
       if (data.class) {
         onUpdateClassData(data.class);
       }
@@ -333,6 +333,7 @@ export const AttendanceSheet: React.FC<AttendanceSheetProps> = ({
       alert("Failed to save multi-session attendance. Please try again.");
     }
   };
+
 
 
   const handleCloseMultiSession = () => {
