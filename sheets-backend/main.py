@@ -31,9 +31,8 @@ db = DatabaseManager(base_dir="data")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",
-        "https://your-app-name.vercel.app",
-        "https://*.vercel.app" 
+        "https://lernova-attendsheets.vercel.app",
+        "http://localhost:3000"
     ],
     allow_credentials=True,
     allow_methods=["*"],
