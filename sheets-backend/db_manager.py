@@ -10,7 +10,7 @@ from sqlalchemy import and_, or_, func
 from database import SessionLocal
 from models import (
     User, Class, ClassStudent, StudentUser, 
-    Enrollment, QRSession, VerificationCode
+    Enrollment, QRSession, VerificationCode, AttendanceSession
 )
 
 class DatabaseManager:
@@ -136,7 +136,7 @@ class DatabaseManager:
         finally:
             db.close()
     
-    def update_user_name(self, user_id: str, new_name: str) -> bool:
+    def update_user(self, user_id: str, new_name: str) -> bool:
         """Update user name"""
         db = self._get_db()
         try:
@@ -151,6 +151,43 @@ class DatabaseManager:
             return False
         finally:
             db.close()
+
+    def update_student(self, student_id: str, name: str = None, device_id: str = None, device_info: dict = None):
+        """Update student information"""
+        db = self.__get_db()
+        try:
+            student = db.query(User).filter(User.id == student_id, User.role == "student").first()
+            
+            if not student:
+                return None
+            
+            # Update fields if provided
+            if name:
+                student.name = name
+            if device_id:
+                student.device_id = device_id
+            if device_info:
+                student.device_info = device_info
+            
+            db.commit()
+            db.refresh(student)
+            
+            return {
+                "id": student.id,
+                "email": student.email,
+                "name": student.name,
+                "device_id": student.device_id,
+                "device_info": student.device_info,
+                "is_verified": student.is_verified,
+                "role": student.role
+            }
+        except Exception as e:
+            print(f"Update student error: {e}")
+            db.rollback()
+            return None
+        finally:
+            db.close()
+
     
     def delete_user(self, user_id: str) -> bool:
         """Delete user and all associated data"""
@@ -221,6 +258,27 @@ class DatabaseManager:
         try:
             classes = db.query(Class).filter(Class.teacher_id == teacher_id).all()
             return [self._format_class(cls, db) for cls in classes]
+        finally:
+            db.close()
+
+    def get_class_sessions(self, class_id: int):
+        """Get all sessions for a class"""
+        db = self.__get_db()
+        try:
+            sessions = db.query(AttendanceSession).filter(
+                AttendanceSession.class_id == str(class_id)
+            ).order_by(AttendanceSession.date.desc()).all()
+            
+            return [{
+                "id": session.id,
+                "class_id": session.class_id,
+                "date": session.date.isoformat() if session.date else None,
+                "title": session.title,
+                "created_at": session.created_at.isoformat() if session.created_at else None
+            } for session in sessions]
+        except Exception as e:
+            print(f"Get class sessions error: {e}")
+            return []
         finally:
             db.close()
     
@@ -373,25 +431,34 @@ class DatabaseManager:
             raise e
         finally:
             db.close()
-    
-    def get_student_by_user_id(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """Get student by user_id"""
-        db = self._get_db()
+            
+    def get_student_by_email(self, email: str) -> dict:
+        """Get student by email"""
         try:
-            student = db.query(StudentUser).filter(StudentUser.user_id == user_id).first()
-            if not student:
+            query = """
+                SELECT id, email, name, password_hash, device_id, device_info, is_verified, role
+                FROM users 
+                WHERE email = %s AND role = 'student'
+            """
+            result = self.execute_query(query, (email,), fetch_one=True)
+            
+            if not result:
                 return None
+            
             return {
-                "id": student.id,
-                "user_id": student.user_id,
-                "name": student.name,
-                "email": student.email,
-                "device_id": student.device_id,
-                "device_info": student.device_info
+                "id": result[0],
+                "email": result[1],
+                "name": result[2],
+                "password_hash": result[3],
+                "device_id": result[4],
+                "device_info": result[5],
+                "is_verified": result[6],
+                "role": result[7]
             }
-        finally:
-            db.close()
-    
+        except Exception as e:
+            print(f"Get student by email error: {e}")
+            return None
+
     def enroll_student(self, student_user_id: str, class_id: int, name: str, roll_no: str) -> Dict[str, Any]:
         """Enroll a student in a class"""
         db = self._get_db()

@@ -94,3 +94,12 @@ class VerificationCode(Base):
     purpose = Column(String, nullable=False)  # 'email_verification', 'password_reset', 'change_password'
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
+
+class AttendanceSession(Base):
+    __tablename__ = "attendance_sessions"
+    
+    id = Column(String, primary_key=True)
+    class_id = Column(String, ForeignKey("classes.id"), nullable=False)
+    date = Column(Date, nullable=False)
+    title = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
